@@ -83,22 +83,23 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré
 - `~/.vibe/config.toml` : `default_agent = "ask"` pour les permissions sur
   chaque appel d'outil
 
-## Installation (CT vibe-svc, Debian 13)
+## Installation (Linux, Python 3.11+)
 
 ```bash
-git clone <repo> /home/vibe/vibe-bridge
-cd /home/vibe/vibe-bridge
+git clone https://github.com/eowindel/vibe-bridge.git
+cd vibe-bridge
 uv venv
 uv pip install --python .venv/bin/python -e .
 ```
 
 ## Service systemd
 
-`/etc/systemd/system/vibe-bridge.service` :
+Exemple (adaptez utilisateur, chemins et fichiers d'environnement à votre
+installation) :
 
 ```ini
 [Unit]
-Description=vibe-bridge : pont Telegram vers vibe-acp (CT 121)
+Description=vibe-bridge : pont Telegram vers vibe-acp
 After=network-online.target
 Wants=network-online.target
 
@@ -123,17 +124,26 @@ Puis `systemctl daemon-reload && systemctl enable --now vibe-bridge`.
 
 ## Pièges ACP découverts en production
 
-Documentés dans la note vault du projet (chaque un a coûté une session de
-debug) : `session/cancel` doit être une **notification** (une requête avec id
-est rejetée par vibe-acp) ; `session/request_permission` envoie des options
-`optionId`/`name` (pas `id`/`option.text`) ; `LoadSessionResponse` n'a pas de
-champ `sessionId` (l'ID passé dans la requête fait foi) ; httpx logge les URL
-d'API avec le token (logger en WARNING).
+Chacun a coûté une session de debug — ils sont gérés par le pont, mais utiles
+à connaître si vous écrivez votre propre client ACP :
 
-## Contexte
+- `session/cancel` doit être une **notification** (une requête avec id est
+  rejetée par vibe-acp avec "method not found")
+- `session/request_permission` envoie des options `optionId`/`name`
+  (pas `id`/`option.text`), et un client doit **toujours** répondre — sinon
+  l'agent reste suspendu indéfiniment
+- `LoadSessionResponse` n'a pas de champ `sessionId` (l'ID passé dans la
+  requête fait foi)
+- httpx logge les URL d'API avec le token en INFO -> passer le logger en
+  `WARNING`
+- la limite stdio par défaut d'asyncio (64 Ko) est mortelle pour un pont ACP :
+  un gros message agent tuait le lecteur en silence
 
-Développé pour l'homelab d'Arno (CT 121 `vibe-svc`, Proxmox, mono-utilisateur).
-Remplace `telegram-acp-bot` (trois bugs bloquants en une soirée : dépendances
-sans bornes, réponse perdue sur timeout réseau + corruption du sender ACP,
-session tuée par un échange ACP trop volumineux). Historique complet dans
-`PLAN-vibe-svc.md` du workspace.
+## Origine du projet
+
+Conçu pour un usage personnel mono-utilisateur : piloter son agent Vibe depuis
+son téléphone, avec validation humaine des actions sensibles. Né de
+l'expérience de `telegram-acp-bot` (dépendances sans bornes, réponse de l'agent
+perdue sur un timeout réseau avec corruption du sender ACP côté SDK, session
+tuée par un échange ACP trop volumineux) : ici, le client ACP est intégré et
+minimaliste, la seule dépendance externe est `python-telegram-bot`.
