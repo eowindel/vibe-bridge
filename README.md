@@ -1,87 +1,90 @@
 # vibe-bridge
 
+[English](README.md) | [Français](README.fr.md)
+
 ![vibe-bridge](docs/banner.png)
 
-Pont Telegram <-> [vibe-acp](https://github.com/mistralai/mistral-vibe) :
-pilote Mistral Vibe depuis Telegram via l'Agent Client Protocol (JSON-RPC 2.0
-sur stdio), sans SDK intermédiaire — le client ACP est intégré
-(`vibe_bridge/acp.py`, ~150 lignes).
+Telegram <-> [vibe-acp](https://github.com/mistralai/mistral-vibe) gateway:
+drive Mistral Vibe from Telegram over the Agent Client Protocol (JSON-RPC 2.0
+on stdio), with no intermediate SDK — the ACP client is built in
+(`vibe_bridge/acp.py`, ~150 lines).
 
-## Fonctionnalités
+## Features
 
-### Entrées
+### Inputs
 
-- **Texte** : un message = un prompt (file d'attente si l'agent est occupé,
-  un cycle à la fois)
-- **Notes vocales et fichiers audio** : transcription via l'API Voxtral de
-  Mistral (`MISTRAL_API_KEY` requise), le texte transcrit devient le prompt
-- **Images** : photo Telegram ou image en pièce jointe -> bloc ACP
-  `{type: "image", data: <base64>, mimeType}`, la légende sert de consigne
-  (défaut : "Décris cette image.")
+- **Text**: one message = one prompt (queued if the agent is busy,
+  one cycle at a time)
+- **Voice notes and audio files**: transcribed via Mistral's Voxtral API
+  (requires `MISTRAL_API_KEY`); the transcript becomes the prompt
+- **Images**: Telegram photo or image attachment -> ACP block
+  `{type: "image", data: <base64>, mimeType}`; the caption is used as the
+  instruction (default: "Décris cette image.")
 
-### Rendu
+### Rendering
 
-- Streaming de la réponse édité en place, découpe automatique à 3800 caractères
-- Réflexion du modèle affichée en direct pendant les générations longues
-  (`agent_thought_chunk`)
-- Réponse finale en HTML riche (markdown converti côté pont, repli texte brut
-  si Telegram refuse le rendu)
-- Indicateur "typing…" pendant toute la durée d'un cycle
+- Response streamed with in-place message edits, automatic splitting at
+  3800 characters
+- Model thinking shown live during long generations (`agent_thought_chunk`)
+- Final answer rendered as rich HTML (markdown converted in the bridge,
+  with a plain-text fallback if Telegram rejects the rendering)
+- "typing…" indicator shown for the whole duration of a cycle
 
-### Contrôle
+### Control
 
-- `/new` — nouvelle session (relance l'agent)
-- `/resume` — sessions récentes en boutons (`session/list`), reprise par
-  `session/load` au clic
-- `/interrupt <consigne>` (alias `/i`) — annule le cycle en cours et enchaîne
-  sur la même session : l'agent garde le contexte de son travail partiel
-- `/mode` — mode de la session en boutons (ask / accept-edits / auto-approve)
-- `/model` — modèle de la session en boutons
-- `/session` — état courant — `/stop` — interrompre et vider la file
-- `/doctor` — diagnostic complet : pont (uptime, erreurs, reprises timeout),
-  token Telegram, clé Mistral, agent (session, mode, modèle), cycle, et
-  RAM/swap/disque du conteneur. Répond même sans session active.
+- `/new` — new session (restarts the agent)
+- `/resume` — recent sessions as inline buttons (`session/list`), resumed via
+  `session/load` on click
+- `/interrupt <instruction>` (alias `/i`) — cancels the current cycle and
+  follows up on the same session: the agent keeps the context of its
+  partial work
+- `/mode` — session mode as buttons (ask / accept-edits / auto-approve)
+- `/model` — session model as buttons
+- `/session` — current state — `/stop` — interrupt and clear the queue
+- `/doctor` — full diagnostic: bridge (uptime, errors, timeout retries),
+  Telegram token, Mistral key, agent (session, mode, model), cycle, and
+  container RAM/swap/disk. Answers even with no active session.
 
 ### Permissions
 
-- Chaque demande d'autorisation de l'agent -> boutons inline
-  (Allow once / session / Always / Deny), retour visuel immédiat au clic,
-  auto-refus après 5 minutes
-- **Garde-fou** : une permission reçoit toujours une réponse — en cas d'erreur
-  du handler, `cancelled` est renvoyé (l'agent ne reste jamais suspendu)
+- Every agent permission request -> inline buttons
+  (Allow once / session / Always / Deny), immediate visual feedback on click,
+  auto-deny after 5 minutes
+- **Safety net**: a permission request always gets an answer — if the
+  handler fails, `cancelled` is sent (the agent never hangs)
 
-### Robustesse
+### Robustness
 
-- Reprise automatique des timeouts de connexion Telegram (requête jamais
-  partie = aucun risque de doublon)
-- Limite stdio ACP à 32 Mio (le défaut asyncio de 64 Ko tuait le lecteur sur
-  les gros messages) ; lecteur annulé **avant** la mort du process agent
-  (l'ordre inverse figeait toute la boucle d'événements)
-- Allowlist stricte : `TELEGRAM_ALLOWED_USER_IDS` obligatoire, le pont refuse
-  de démarrer sans elle
+- Automatic retry of Telegram connection timeouts (request never sent =
+  no risk of duplicates)
+- ACP stdio limit raised to 32 MiB (asyncio's 64 KiB default silently killed
+  the reader on large messages); the reader is cancelled **before** the
+  agent process dies (the reverse order froze the whole event loop)
+- Strict allowlist: `TELEGRAM_ALLOWED_USER_IDS` is mandatory — the bridge
+  refuses to start without it
 
-## Configuration (variables d'environnement)
+## Configuration (environment variables)
 
-| Variable | Obligatoire | Défaut |
+| Variable | Required | Default |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | oui | — |
-| `TELEGRAM_ALLOWED_USER_IDS` | oui | — |
-| `ACP_AGENT_COMMAND` | non | `vibe-acp` |
-| `VIBE_BRIDGE_WORKSPACE` | non | `/home/vibe/workspace` |
-| `VIBE_BRIDGE_TRANSCRIBE_MODEL` | non | `voxtral-mini-latest` |
-| `VIBE_BRIDGE_STDIO_LIMIT` | non | `33554432` (octets) |
-| `MISTRAL_API_KEY` | pour les notes vocales | — |
-| `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
-| `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |
+| `TELEGRAM_BOT_TOKEN` | yes | — |
+| `TELEGRAM_ALLOWED_USER_IDS` | yes | — |
+| `ACP_AGENT_COMMAND` | no | `vibe-acp` |
+| `VIBE_BRIDGE_WORKSPACE` | no | `/home/vibe/workspace` |
+| `VIBE_BRIDGE_TRANSCRIBE_MODEL` | no | `voxtral-mini-latest` |
+| `VIBE_BRIDGE_STDIO_LIMIT` | no | `33554432` (bytes) |
+| `MISTRAL_API_KEY` | for voice notes | — |
+| `VIBE_BRIDGE_PROMPT_TIMEOUT` | no | `900` (seconds) |
+| `VIBE_BRIDGE_LOG_LEVEL` | no | `INFO` |
 
-## Identité et mémoire de l'agent (hors pont, côté vibe-acp)
+## Agent identity and memory (outside the bridge, on the vibe-acp side)
 
-- `~/.vibe/AGENTS.md` (global) : identité et ton — **l'AGENTS.md du workspace
-  n'est pas chargé** en mode ACP (dossier non trusté), seul le global l'est
-- `<workspace>/MEMORY.md` : faits durables lus et maintenus par l'agent
-  (consigne dans l'AGENTS.md) — markdown simple, sans embeddings
-- `~/.vibe/config.toml` : `default_agent = "ask"` pour les permissions sur
-  chaque appel d'outil
+- `~/.vibe/AGENTS.md` (global): identity and tone — **the workspace AGENTS.md
+  is not loaded** in ACP mode (untrusted directory); only the global one is
+- `<workspace>/MEMORY.md`: durable facts read and maintained by the agent
+  itself (instruction in AGENTS.md) — plain markdown, no embeddings
+- `~/.vibe/config.toml`: `default_agent = "ask"` to require approval for
+  every tool call
 
 ## Installation (Linux, Python 3.11+)
 
@@ -92,14 +95,13 @@ uv venv
 uv pip install --python .venv/bin/python -e .
 ```
 
-## Service systemd
+## systemd service
 
-Exemple (adaptez utilisateur, chemins et fichiers d'environnement à votre
-installation) :
+Example (adapt user, paths and environment files to your setup):
 
 ```ini
 [Unit]
-Description=vibe-bridge : pont Telegram vers vibe-acp
+Description=vibe-bridge : Telegram gateway to vibe-acp
 After=network-online.target
 Wants=network-online.target
 
@@ -120,30 +122,33 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Puis `systemctl daemon-reload && systemctl enable --now vibe-bridge`.
+Then `systemctl daemon-reload && systemctl enable --now vibe-bridge`.
 
-## Pièges ACP découverts en production
+## ACP pitfalls found in production
 
-Chacun a coûté une session de debug — ils sont gérés par le pont, mais utiles
-à connaître si vous écrivez votre propre client ACP :
+Each of these cost a debugging session — the bridge handles them all, but
+they are worth knowing if you write your own ACP client:
 
-- `session/cancel` doit être une **notification** (une requête avec id est
-  rejetée par vibe-acp avec "method not found")
-- `session/request_permission` envoie des options `optionId`/`name`
-  (pas `id`/`option.text`), et un client doit **toujours** répondre — sinon
-  l'agent reste suspendu indéfiniment
-- `LoadSessionResponse` n'a pas de champ `sessionId` (l'ID passé dans la
-  requête fait foi)
-- httpx logge les URL d'API avec le token en INFO -> passer le logger en
-  `WARNING`
-- la limite stdio par défaut d'asyncio (64 Ko) est mortelle pour un pont ACP :
-  un gros message agent tuait le lecteur en silence
+- `session/cancel` must be sent as a **notification** (a request with an id
+  is rejected by vibe-acp with "method not found")
+- `session/request_permission` sends options as `optionId`/`name`
+  (not `id`/`option.text`), and a client must **always** answer — otherwise
+  the agent hangs forever
+- `LoadSessionResponse` has no `sessionId` field (the ID passed in the
+  request is the one that counts)
+- httpx logs API URLs (including the token) at INFO level -> set the logger
+  to `WARNING`
+- asyncio's default stdio limit (64 KiB) is deadly for an ACP bridge:
+  one large agent message silently killed the reader
 
-## Origine du projet
+## Project origin
 
-Conçu pour un usage personnel mono-utilisateur : piloter son agent Vibe depuis
-son téléphone, avec validation humaine des actions sensibles. Né de
-l'expérience de `telegram-acp-bot` (dépendances sans bornes, réponse de l'agent
-perdue sur un timeout réseau avec corruption du sender ACP côté SDK, session
-tuée par un échange ACP trop volumineux) : ici, le client ACP est intégré et
-minimaliste, la seule dépendance externe est `python-telegram-bot`.
+Built for single-user personal use: drive your Vibe agent from your phone,
+with human approval of sensitive actions. It was born from the experience
+with `telegram-acp-bot` (unbounded dependencies, agent reply lost on a
+network timeout with ACP sender corruption on the SDK side, session killed
+by an oversized ACP exchange): here, the ACP client is built in and
+minimal, and the only external dependency is `python-telegram-bot`.
+
+> Note: user-facing bridge messages are currently in French. An i18n option
+> is on the roadmap.
