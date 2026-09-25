@@ -39,6 +39,8 @@ class AcpAgent:
         self._pending: dict[int, asyncio.Future[dict]] = {}
         self.session_id: str | None = None
         self.dead = False
+        self._reader_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
         # Branches par le bridge.
         self.on_update: Callable[[dict], Any] | None = None
         self.on_permission: Callable[[dict], Any] | None = None
@@ -55,8 +57,8 @@ class AcpAgent:
             cwd=self.cwd,
             limit=STDIO_LIMIT,
         )
-        asyncio.create_task(self._read_stdout())
-        asyncio.create_task(self._drain_stderr())
+        self._reader_task = asyncio.create_task(self._read_stdout())
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
         result = await self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {},
@@ -85,8 +87,19 @@ class AcpAgent:
         self.dead = True
         for fut in self._pending.values():
             if not fut.done():
-                fut.set_exception(AcpError("agent arrête"))
+                fut.set_exception(AcpError("agent arrêté"))
         self._pending.clear()
+        # Couper le lecteur AVANT de tuer le process : readline() sur le
+        # stdout d'un process tué peut être réveillé en continu sans jamais
+        # voir l'EOF, et figer toute la boucle d'événements (constaté le
+        # 26/09 — py-spy montrait readuntil en boucle active).
+        for task in (self._reader_task, self._stderr_task):
+            if task and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._reader_task = None
+        self._stderr_task = None
         if self.proc and self.proc.returncode is None:
             try:
                 self.proc.terminate()
