@@ -115,6 +115,8 @@ class ChatSession:
     async def finalize(self) -> None:
         """Dernier rendu : la réponse remplace le statut, découpée si longue."""
         parts = split_message(self.text)
+        if parts == [""]:
+            parts = []  # réponse vide : ne jamais éditer avec un texte vide
         if self.status_msg_id is None:
             for part in parts:
                 await self.send(part)
@@ -177,19 +179,22 @@ class ChatSession:
             f"🔐 {label}\nAutoriser ?",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
+        if msg_id is None:
+            # Impossible d'afficher les boutons : refuser proprement.
+            return None
         self.perm_future = asyncio.get_running_loop().create_future()
         try:
             return await asyncio.wait_for(self.perm_future, PERMISSION_TIMEOUT)
         except asyncio.TimeoutError:
+            with contextlib.suppress(TelegramError):
+                await tg_call(
+                    self.bot.edit_message_text,
+                    chat_id=self.chat_id, message_id=msg_id,
+                    text="🔐 délai dépassé — refusé",
+                )
             return None
         finally:
             self.perm_future = None
-            if msg_id:
-                with contextlib.suppress(Exception):
-                    await tg_call(
-                        self.bot.delete_message,
-                        chat_id=self.chat_id, message_id=msg_id,
-                    )
 
     # -- cycle de vie ------------------------------------------------------------
 
@@ -384,10 +389,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data = query.data or ""
     if not data.startswith("p:"):
         return
-    if s.perm_future is None or s.perm_future.done():
+    fut = s.perm_future
+    if fut is None or fut.done():
         return
     option = data[2:]
-    s.perm_future.set_result(None if option == "__cancel__" else option)
+    # Retour visuel immédiat : les boutons disparaissent au clic.
+    with contextlib.suppress(TelegramError):
+        label = "annulé" if option == "__cancel__" else option
+        await query.edit_message_text(f"🔐 permission : {label}")
+    fut.set_result(None if option == "__cancel__" else option)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
