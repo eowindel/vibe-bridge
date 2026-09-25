@@ -869,7 +869,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     data = query.data or ""
     if data.startswith("lang:"):
-        target = data[4:]
+        target = data[5:]
         if target in ("fr", "en"):
             set_lang(target)
             with contextlib.suppress(TelegramError):
