@@ -99,6 +99,7 @@ class ChatSession:
         self.last_edit: float = 0.0
         self.busy = False
         self.perm_future: asyncio.Future[str | None] | None = None
+        self.redirect_pending = False
 
     # -- telegram ------------------------------------------------------------
 
@@ -328,7 +329,10 @@ class ChatSession:
                 result = await agent.prompt(item, timeout=PROMPT_TIMEOUT)
                 await self.finalize()
                 stop = result.get("stopReason")
-                if stop and stop != "end_turn":
+                if stop == "cancelled" and self.redirect_pending:
+                    self.redirect_pending = False
+                    await self.send("↪️ interrompu — nouvelle consigne en cours…")
+                elif stop and stop != "end_turn":
                     await self.send(f"[cycle terminé : {stop}]")
             except asyncio.TimeoutError:
                 with contextlib.suppress(Exception):
@@ -351,6 +355,18 @@ class ChatSession:
                 with contextlib.suppress(asyncio.CancelledError):
                     await typing_task
                 self.busy = False
+
+    async def interrupt_and_redirect(self, text: str) -> None:
+        """/interrupt : annule le cycle courant, la consigne enchaîne
+        sur la même session — l'agent garde le contexte de son travail
+        partiel (le tour annulé reste dans son historique)."""
+        if self.busy and self.agent:
+            self.redirect_pending = True
+            with contextlib.suppress(Exception):
+                await self.agent.cancel()
+            self.queue.put_nowait(text)  # traité dès la fin du cycle annulé
+        else:
+            self.queue.put_nowait(text)
 
     async def interrupt(self) -> int:
         """/stop : annule le cycle courant et vide la file."""
@@ -428,6 +444,27 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     drained = await s.interrupt()
     await s.send(f"[cycle interrompu, {drained} message(s) retirés de la file]")
+
+
+async def cmd_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/interrupt <consigne> (alias /i) : arrête le cycle en cours et
+    le remplace immédiatement par cette consigne, même session."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await s.send(
+            "Usage : /interrupt <consigne>\n"
+            "Arrête le cycle en cours et enchaîne sur cette consigne "
+            "(l'agent garde le contexte de ce qu'il faisait)."
+        )
+        return
+    try:
+        await s.ensure_session()
+    except Exception:
+        return
+    await s.interrupt_and_redirect(text)
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -549,6 +586,7 @@ def main() -> None:
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("session", cmd_session))
     app.add_handler(CommandHandler("stop", cmd_stop))
+    app.add_handler(CommandHandler(["interrupt", "i"], cmd_interrupt))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))

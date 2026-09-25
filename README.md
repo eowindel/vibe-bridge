@@ -17,7 +17,7 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré (`vibe_bridg
 - Reprise automatique des timeouts de connexion Telegram (requête jamais
   partie = aucun risque de doublon)
 - Allowlist stricte : `TELEGRAM_ALLOWED_USER_IDS` obligatoire
-- Commandes : `/new`, `/session`, `/stop`, `/start`
+- Commandes : `/new`, `/session`, `/stop`, `/interrupt` (alias `/i`), `/start`
 
 ## Configuration (variables d'environnement)
 
