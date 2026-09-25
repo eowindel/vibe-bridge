@@ -28,6 +28,7 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré (`vibe_bridg
 | `ACP_AGENT_COMMAND` | non | `vibe-acp` |
 | `VIBE_BRIDGE_WORKSPACE` | non | `/home/vibe/workspace` |
 | `VIBE_BRIDGE_TRANSCRIBE_MODEL` | non | `voxtral-mini-latest` |
+| `VIBE_BRIDGE_STDIO_LIMIT` | non | `33554432` (limite des messages ACP en octets) |
 | `MISTRAL_API_KEY` | pour les notes vocales | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
 | `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |

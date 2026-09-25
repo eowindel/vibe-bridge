@@ -11,12 +11,17 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shlex
 from typing import Any, Callable
 
 log = logging.getLogger("vibe_bridge.acp")
 
 PROTOCOL_VERSION = 1
+
+# Limite du StreamReader stdio (defaut asyncio : 64 Ko !). Un message agent
+# plus gros tuait silencieusement le lecteur et gelait le pont (lecon du 26/09).
+STDIO_LIMIT = int(os.environ.get("VIBE_BRIDGE_STDIO_LIMIT", str(32 * 1024 * 1024)))
 
 
 class AcpError(Exception):
@@ -48,6 +53,7 @@ class AcpAgent:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self.cwd,
+            limit=STDIO_LIMIT,
         )
         asyncio.create_task(self._read_stdout())
         asyncio.create_task(self._drain_stderr())
@@ -88,8 +94,14 @@ class AcpAgent:
     async def _read_stdout(self) -> None:
         assert self.proc and self.proc.stdout
         while True:
-            line = await self.proc.stdout.readline()
-            if not line:
+            try:
+                line = await self.proc.stdout.readline()
+            except ValueError as exc:
+                # Message plus gros que STDIO_LIMIT : le lecteur doit mourir
+                # proprement (dead + echec des requetes pendantes), pas
+                # silencieusement.
+                log.error("message agent au-dela de la limite stdio (%s) : %s",
+                          STDIO_LIMIT, exc)
                 break
             line = line.strip()
             if not line:
@@ -203,12 +215,22 @@ class AcpAgent:
         }, timeout=timeout)
 
     async def cancel(self) -> None:
+        """session/cancel — en NOTIFICATION, sans id.
+
+        Envoyee comme requete (avec id), vibe-acp la rejette avec
+        'method not found' ; en notification, le prompt en cours retourne
+        stopReason=cancelled (verifie par probe le 26/09).
+        """
         if self.session_id and not self.dead:
             try:
-                await self._request("session/cancel", {
-                    "sessionId": self.session_id,
-                    "reason": "demande de l'utilisateur",
-                }, timeout=10)
+                await self._write({
+                    "jsonrpc": "2.0",
+                    "method": "session/cancel",
+                    "params": {
+                        "sessionId": self.session_id,
+                        "reason": "demande de l'utilisateur",
+                    },
+                })
             except Exception:
                 log.exception("session/cancel a échoué")
 
