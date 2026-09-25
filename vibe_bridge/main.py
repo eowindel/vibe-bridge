@@ -97,7 +97,8 @@ def text_block(text: str) -> dict:
     return {"type": "text", "text": text}
 
 
-async def tg_call(fn: Any, *args: Any, retries: int = 3, **kwargs: Any) -> Any:
+async def tg_call(fn: Any, *args: Any, retries: int = 3,
+                 retry_read: bool = False, **kwargs: Any) -> Any:
     """Appel API Telegram avec reprise sur timeout de connexion.
 
     On ne reprend que si la requête n'a jamais été envoyée
@@ -111,9 +112,13 @@ async def tg_call(fn: Any, *args: Any, retries: int = 3, **kwargs: Any) -> Any:
             return res
         except TimedOut as err:
             cause = err.__cause__
-            if attempt < retries and isinstance(
+            # retry_read : autorise la reprise des ReadTimeout pour les
+            # messages informatifs (aide, doctor) — un doublon rare y est
+            # sans consequence, contrairement aux reponses de l'agent.
+            retryable = isinstance(
                 cause, (httpx.ConnectTimeout, httpx.PoolTimeout)
-            ):
+            ) or (retry_read and isinstance(cause, httpx.ReadTimeout))
+            if attempt < retries and retryable:
                 STATS["tg_retries"] += 1
                 await asyncio.sleep(1.5 * (attempt + 1))
                 continue
@@ -471,6 +476,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await tg_call(
         context.bot.send_message,
+        retry_read=True,
         chat_id=update.effective_chat.id,
         text=L(
             "vibe-bridge — pilotage de Vibe par Telegram\n\n"
@@ -648,7 +654,7 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"├─ cycle: {'busy' if s.busy else 'idle'} — queue: {s.queue.qsize()}\n"
         f"└─ CT: RAM {ram_line} — swap {swap} MiB — disk {disk_line}"
     )
-    await tg_call(context.bot.send_message,
+    await tg_call(context.bot.send_message, retry_read=True,
                   chat_id=update.effective_chat.id, text=text)
 
 
