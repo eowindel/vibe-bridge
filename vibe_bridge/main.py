@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 import httpx
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, TelegramError, TimedOut
 from telegram.ext import (
@@ -409,9 +409,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text=(
             "vibe-bridge — pilotage de Vibe par Telegram\n\n"
             "Un message = un prompt (file d'attente si l'agent est occupé).\n"
+            "Une note vocale = transcription puis prompt.\n\n"
             "/new — nouvelle session\n"
             "/session — état de la session\n"
-            "/stop — interrompre le cycle et vider la file"
+            "/stop — interrompre le cycle et vider la file\n"
+            "/interrupt <consigne> — arrêter le cycle en cours et le remplacer "
+            "(alias /i)\n"
         ),
     )
 
@@ -570,6 +573,19 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
+async def _post_init(app: Application) -> None:
+    """Enregistre le menu de commandes Telegram du pont (setMyCommands
+    persiste par bot — sans ça, l'ancien bot gardait son menu affiché)."""
+    with contextlib.suppress(TelegramError):
+        await app.bot.set_my_commands([
+            BotCommand("new", "nouvelle session"),
+            BotCommand("session", "état de la session"),
+            BotCommand("stop", "interrompre et vider la file"),
+            BotCommand("interrupt", "rediriger l'agent en pleine tâche"),
+            BotCommand("start", "aide"),
+        ])
+
+
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("VIBE_BRIDGE_LOG_LEVEL", "INFO"),
@@ -581,7 +597,7 @@ def main() -> None:
         raise SystemExit("TELEGRAM_BOT_TOKEN manquant")
     if not ALLOWED_USER_IDS:
         raise SystemExit("TELEGRAM_ALLOWED_USER_IDS manquant (allowlist obligatoire)")
-    app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app: Application = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler(["start", "help"], cmd_help))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("session", cmd_session))
