@@ -493,6 +493,53 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/mode : change le mode de la session (ask / accept-edits / auto-approve)."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    try:
+        await s.ensure_session()
+    except Exception:
+        return
+    agent = s.agent
+    if not agent or not agent.modes.get("availableModes"):
+        await s.send("aucun mode disponible")
+        return
+    current = agent.modes.get("currentModeId")
+    buttons = []
+    for m in agent.modes["availableModes"]:
+        mark = "● " if m.get("id") == current else "○ "
+        buttons.append([InlineKeyboardButton(
+            f"{mark}{m.get('name') or m['id']}", callback_data=f"m:{m['id']}")])
+    buttons.append([InlineKeyboardButton("Annuler", callback_data="m:__cancel__")])
+    await s.send("Mode de la session :", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/model : change le modèle de la session (via configOptions)."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    try:
+        await s.ensure_session()
+    except Exception:
+        return
+    agent = s.agent
+    opt = next((o for o in (agent.config_options or []) if o.get("id") == "model"), None)
+    if not opt:
+        await s.send("aucun modèle configurable")
+        return
+    current = opt.get("currentValue")
+    buttons = []
+    for v in opt.get("options", []):
+        mark = "● " if v.get("value") == current else "○ "
+        label = f"{mark}{v.get('name') or v['value']}"
+        buttons.append([InlineKeyboardButton(label[:60], callback_data=f"v:{v['value']}")])
+    buttons.append([InlineKeyboardButton("Annuler", callback_data="v:__cancel__")])
+    await s.send("Modèle de la session :", reply_markup=InlineKeyboardMarkup(buttons))
+
+
 async def cmd_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/interrupt <consigne> (alias /i) : arrête le cycle en cours et
     le remplace immédiatement par cette consigne, même session."""
@@ -593,6 +640,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if s is None:
         return
     data = query.data or ""
+    if data.startswith("m:") or data.startswith("v:"):
+        prefix, target = data[:2], data[2:]
+        config_id = "mode" if prefix == "m:" else "model"
+        if target == "__cancel__":
+            with contextlib.suppress(TelegramError):
+                await query.edit_message_text("annulé")
+            return
+        try:
+            await s.agent.set_config_option(config_id, target)
+        except Exception as e:
+            with contextlib.suppress(TelegramError):
+                await query.edit_message_text(f"[échec : {e}]")
+            return
+        with contextlib.suppress(TelegramError):
+            await query.edit_message_text(f"{config_id} : {target}")
+        return
     if data.startswith("r:"):
         target = data[2:]
         if target == "__cancel__":
@@ -634,6 +697,8 @@ async def _post_init(app: Application) -> None:
         await app.bot.set_my_commands([
             BotCommand("new", "nouvelle session"),
             BotCommand("resume", "reprendre une session passée"),
+            BotCommand("mode", "changer le mode (ask, auto...)"),
+            BotCommand("model", "changer le modèle"),
             BotCommand("session", "état de la session"),
             BotCommand("stop", "interrompre et vider la file"),
             BotCommand("interrupt", "rediriger l'agent en pleine tâche"),
@@ -656,6 +721,8 @@ def main() -> None:
     app.add_handler(CommandHandler(["start", "help"], cmd_help))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("resume", cmd_resume))
+    app.add_handler(CommandHandler("mode", cmd_mode))
+    app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CommandHandler("session", cmd_session))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler(["interrupt", "i"], cmd_interrupt))

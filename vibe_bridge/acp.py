@@ -39,6 +39,8 @@ class AcpAgent:
         self._pending: dict[int, asyncio.Future[dict]] = {}
         self.session_id: str | None = None
         self.dead = False
+        self.modes: dict = {}
+        self.config_options: list[dict] = []
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         # Branches par le bridge.
@@ -83,6 +85,8 @@ class AcpAgent:
             self.session_id = result.get("sessionId")
         if not self.session_id:
             raise AcpError("session/new/load sans sessionId")
+        self.modes = result.get("modes") or {}
+        self.config_options = result.get("configOptions") or []
         log.info("session ACP ouverte : %s%s", self.session_id,
                  " (reprise)" if load_session_id else "")
 
@@ -237,6 +241,20 @@ class AcpAgent:
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": text}],
         }, timeout=timeout)
+
+    async def set_config_option(self, config_id: str, value: str) -> None:
+        """session/set_config_option : change un option de session (mode,
+        modele...) ; met a jour l'etat local pour l'affichage."""
+        await self._request("session/set_config_option", {
+            "sessionId": self.session_id,
+            "configId": config_id,
+            "value": value,
+        })
+        for opt in self.config_options:
+            if opt.get("id") == config_id:
+                opt["currentValue"] = value
+        if config_id == "mode" and isinstance(self.modes, dict):
+            self.modes["currentModeId"] = value
 
     async def list_sessions(self) -> list[dict]:
         """session/list : sessions connues de l'agent (récentes d'abord)."""
