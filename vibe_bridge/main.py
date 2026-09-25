@@ -405,6 +405,8 @@ def main() -> None:
         level=os.environ.get("VIBE_BRIDGE_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # httpx journalise les URL d'API Telegram (avec le token) en INFO.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     if not BOT_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN manquant")
     if not ALLOWED_USER_IDS:
