@@ -464,7 +464,8 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         tg_file = await tg_call(context.bot.get_file, media.file_id)
         data = bytes(await tg_file.download_as_bytearray())
-        text = await transcribe_audio(data, media.file_name or "note.oga")
+        filename = getattr(media, "file_name", None) or "note.oga"
+        text = await transcribe_audio(data, filename)
     except Exception as e:
         log.exception("échec de transcription")
         if status_id:
