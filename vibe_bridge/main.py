@@ -48,6 +48,16 @@ ALLOWED_USER_IDS = {
 }
 
 
+# Statistiques internes pour /doctor.
+STATS = {
+    "started_at": time.time(),
+    "tg_retries": 0,
+    "tg_last_ok": 0.0,
+    "mistral_last_ok": 0.0,
+    "errors": 0,
+}
+
+
 def text_block(text: str) -> dict:
     return {"type": "text", "text": text}
 
@@ -61,12 +71,15 @@ async def tg_call(fn: Any, *args: Any, retries: int = 3, **kwargs: Any) -> Any:
     """
     for attempt in range(retries + 1):
         try:
-            return await fn(*args, **kwargs)
+            res = await fn(*args, **kwargs)
+            STATS["tg_last_ok"] = time.time()
+            return res
         except TimedOut as err:
             cause = err.__cause__
             if attempt < retries and isinstance(
                 cause, (httpx.ConnectTimeout, httpx.PoolTimeout)
             ):
+                STATS["tg_retries"] += 1
                 await asyncio.sleep(1.5 * (attempt + 1))
                 continue
             raise
@@ -85,7 +98,9 @@ async def transcribe_audio(data: bytes, filename: str) -> str:
         )
     if resp.status_code != 200:
         raise RuntimeError(f"API transcription {resp.status_code} : {resp.text[:200]}")
-    return (resp.json().get("text") or "").strip()
+    text = (resp.json().get("text") or "").strip()
+    STATS["mistral_last_ok"] = time.time()
+    return text
 
 
 class ChatSession:
@@ -426,6 +441,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Une note vocale = transcription puis prompt.\n\n"
             "Une image = analysée (sa légende sert de consigne).\n"
             "/new — nouvelle session\n"
+            "/doctor — diagnostic du pont\n"
             "/session — état de la session\n"
             "/stop — interrompre le cycle et vider la file\n"
             "/interrupt <consigne> — arrêter le cycle en cours et le remplacer "
@@ -497,6 +513,77 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "(la reprise remplace la session courante)",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
+
+
+def _read_meminfo() -> tuple[int, int, int]:
+    """(ram utilisée Mio, ram totale Mio, swap utilisé Mio)."""
+    info: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                if v:
+                    info[k] = int(v.strip().split()[0]) // 1024
+    except OSError:
+        return -1, -1, -1
+    swap = info.get("SwapTotal", 0) - info.get("SwapFree", 0)
+    used = info.get("MemTotal", 0) - info.get("MemAvailable", 0)
+    return used, info.get("MemTotal", 0), swap
+
+
+def _fmt_age(ts: float) -> str:
+    if not ts:
+        return "jamais"
+    d = time.time() - ts
+    if d < 60:
+        return f"{int(d)} s"
+    if d < 3600:
+        return f"{int(d / 60)} min"
+    return f"{int(d / 3600)} h"
+
+
+async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/doctor : diagnostic du pont, de l'agent et du conteneur."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    try:
+        me = await tg_call(context.bot.get_me)
+        tg_line = f"token OK (@{me.username})"
+    except Exception as e:
+        tg_line = f"[erreur : {e}]"
+    if s.agent and not s.agent.dead:
+        mode = s.agent.modes.get("currentModeId") or "?"
+        opt = next((o for o in s.agent.config_options
+                    if o.get("id") == "model"), {})
+        model = opt.get("currentValue") or "?"
+        agent_line = (f"vivant — session {str(s.agent.session_id)[:8]}… — "
+                      f"mode {mode} — modèle {model}")
+    else:
+        agent_line = "aucun agent actif"
+    used, total, swap = _read_meminfo()
+    ram_line = f"{used}/{total} Mio" if total > 0 else "?"
+    try:
+        st = os.statvfs("/")
+        disk_total = st.f_blocks * st.f_frsize / 2**30
+        disk_free = st.f_bavail * st.f_frsize / 2**30
+        disk_line = f"{disk_total - disk_free:.1f}/{disk_total:.0f} Go"
+    except OSError:
+        disk_line = "?"
+    uptime = time.time() - STATS["started_at"]
+    h, m = int(uptime // 3600), int(uptime % 3600 // 60)
+    text = (
+        f"🩺 vibe-bridge {__version__} — diagnostic\n"
+        f"├─ pont : actif depuis {h}h{m:02d} — erreurs : {STATS['errors']}\n"
+        f"├─ Telegram : {tg_line} — reprises timeout : {STATS['tg_retries']}\n"
+        f"├─ Mistral : clé {'présente' if MISTRAL_API_KEY else 'ABSENTE'} — "
+        f"dernier appel pont : {_fmt_age(STATS['mistral_last_ok'])}\n"
+        f"├─ agent : {agent_line}\n"
+        f"├─ cycle : {'occupé' if s.busy else 'inactif'} — file : {s.queue.qsize()}\n"
+        f"└─ CT : RAM {ram_line} — swap {swap} Mio — disque {disk_line}"
+    )
+    await tg_call(context.bot.send_message,
+                  chat_id=update.effective_chat.id, text=text)
 
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -737,6 +824,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    STATS["errors"] += 1
     log.exception("erreur non gérée", exc_info=context.error)
     chat = getattr(update, "effective_chat", None)
     if chat is not None:
@@ -757,6 +845,7 @@ async def _post_init(app: Application) -> None:
             BotCommand("mode", "changer le mode (ask, auto...)"),
             BotCommand("model", "changer le modèle"),
             BotCommand("session", "état de la session"),
+            BotCommand("doctor", "diagnostic du pont"),
             BotCommand("stop", "interrompre et vider la file"),
             BotCommand("interrupt", "rediriger l'agent en pleine tâche"),
             BotCommand("start", "aide"),
@@ -781,6 +870,7 @@ def main() -> None:
     app.add_handler(CommandHandler("mode", cmd_mode))
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CommandHandler("session", cmd_session))
+    app.add_handler(CommandHandler("doctor", cmd_doctor))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler(["interrupt", "i"], cmd_interrupt))
     app.add_handler(CallbackQueryHandler(on_callback))
