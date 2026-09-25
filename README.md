@@ -1,5 +1,7 @@
 # vibe-bridge
 
+![vibe-bridge](docs/banner.png)
+
 Pont Telegram <-> [vibe-acp](https://github.com/mistralai/mistral-vibe) :
 pilote Mistral Vibe depuis Telegram via l'Agent Client Protocol (JSON-RPC 2.0
 sur stdio), sans SDK intermédiaire — le client ACP est intégré
