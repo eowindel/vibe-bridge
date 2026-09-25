@@ -264,6 +264,14 @@ class ChatSession:
         await self._stop_everything()
         await self.start_session()
 
+    async def resume_session(self, session_id: str) -> None:
+        """Reprend une session passée : remplace la session courante."""
+        await self._stop_everything()
+        try:
+            await self.start_session(load_session_id=session_id)
+        except Exception:
+            return
+
     async def _stop_everything(self) -> None:
         if self.agent:
             with contextlib.suppress(Exception):
@@ -284,19 +292,20 @@ class ChatSession:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self.worker
 
-    async def start_session(self) -> None:
+    async def start_session(self, load_session_id: str | None = None) -> None:
         agent = AcpAgent(AGENT_COMMAND, WORKSPACE)
         agent.on_update = self.handle_update
         agent.on_permission = self.handle_permission
         try:
-            await agent.start()
+            await agent.start(load_session_id=load_session_id)
         except Exception as e:
             await self.send(f"[impossible de démarrer l'agent : {e}]")
             raise
         self.agent = agent
         self.queue = asyncio.Queue()
         self.worker = asyncio.create_task(self.run_worker())
-        await self.send(f"🟢 session ouverte ({str(agent.session_id)[:8]}…)")
+        label = "↩️ session reprise" if load_session_id else "🟢 session ouverte"
+        await self.send(f"{label} ({str(agent.session_id)[:8]}…)")
 
     async def _keep_typing(self) -> None:
         """Indicateur 'typing…' en haut du chat, renouvelé pendant le cycle
@@ -449,6 +458,41 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await s.send(f"[cycle interrompu, {drained} message(s) retirés de la file]")
 
 
+async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/resume : liste les sessions récentes en boutons, reprise au clic."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    try:
+        await s.ensure_session()
+    except Exception:
+        return
+    try:
+        sessions = await s.agent.list_sessions()
+    except Exception as e:
+        await s.send(f"[impossible de lister les sessions : {e}]")
+        return
+    current = s.agent.session_id if s.agent else None
+    entries = [e for e in sessions if e.get("sessionId") != current][:8]
+    if not entries:
+        await s.send("aucune autre session à reprendre")
+        return
+    buttons = []
+    for e in entries:
+        title = (e.get("title") or e.get("sessionId", "?"))[:48]
+        date = (e.get("updatedAt") or "?")[:10]
+        buttons.append([InlineKeyboardButton(
+            f"{title} — {date}",
+            callback_data=f"r:{e['sessionId']}",
+        )])
+    buttons.append([InlineKeyboardButton("Annuler", callback_data="r:__cancel__")])
+    await s.send(
+        "Sessions récentes — laquelle reprendre ?\n"
+        "(la reprise remplace la session courante)",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
 async def cmd_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/interrupt <consigne> (alias /i) : arrête le cycle en cours et
     le remplace immédiatement par cette consigne, même session."""
@@ -549,6 +593,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if s is None:
         return
     data = query.data or ""
+    if data.startswith("r:"):
+        target = data[2:]
+        if target == "__cancel__":
+            with contextlib.suppress(TelegramError):
+                await query.edit_message_text("reprise annulée")
+            return
+        with contextlib.suppress(TelegramError):
+            await query.edit_message_text("↩️ reprise de la session…")
+        await s.resume_session(target)
+        return
     if not data.startswith("p:"):
         return
     fut = s.perm_future
@@ -579,6 +633,7 @@ async def _post_init(app: Application) -> None:
     with contextlib.suppress(TelegramError):
         await app.bot.set_my_commands([
             BotCommand("new", "nouvelle session"),
+            BotCommand("resume", "reprendre une session passée"),
             BotCommand("session", "état de la session"),
             BotCommand("stop", "interrompre et vider la file"),
             BotCommand("interrupt", "rediriger l'agent en pleine tâche"),
@@ -600,6 +655,7 @@ def main() -> None:
     app: Application = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler(["start", "help"], cmd_help))
     app.add_handler(CommandHandler("new", cmd_new))
+    app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("session", cmd_session))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler(["interrupt", "i"], cmd_interrupt))

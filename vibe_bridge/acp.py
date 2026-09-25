@@ -45,7 +45,7 @@ class AcpAgent:
 
     # -- cycle de vie -------------------------------------------------------
 
-    async def start(self) -> None:
+    async def start(self, load_session_id: str | None = None) -> None:
         log.info("lancement de l'agent : %s (cwd=%s)", self.command, self.cwd)
         self.proc = await asyncio.create_subprocess_exec(
             *self.command,
@@ -67,11 +67,19 @@ class AcpAgent:
             "initialize OK (protocol %s, loadSession=%s)",
             result.get("protocolVersion"), caps.get("loadSession"),
         )
-        result = await self._request("session/new", {"cwd": self.cwd, "mcpServers": []})
+        if load_session_id:
+            result = await self._request("session/load", {
+                "sessionId": load_session_id,
+                "cwd": self.cwd,
+                "mcpServers": [],
+            })
+        else:
+            result = await self._request("session/new", {"cwd": self.cwd, "mcpServers": []})
         self.session_id = result.get("sessionId")
         if not self.session_id:
-            raise AcpError("session/new sans sessionId")
-        log.info("session ACP ouverte : %s", self.session_id)
+            raise AcpError("session/new/load sans sessionId")
+        log.info("session ACP ouverte : %s%s", self.session_id,
+                 " (reprise)" if load_session_id else "")
 
     async def stop(self) -> None:
         self.dead = True
@@ -213,6 +221,11 @@ class AcpAgent:
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": text}],
         }, timeout=timeout)
+
+    async def list_sessions(self) -> list[dict]:
+        """session/list : sessions connues de l'agent (récentes d'abord)."""
+        result = await self._request("session/list", {})
+        return result.get("sessions", [])
 
     async def cancel(self) -> None:
         """session/cancel — en NOTIFICATION, sans id.
