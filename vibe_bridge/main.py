@@ -164,9 +164,10 @@ class ChatSession:
             return None
         buttons = []
         for opt in options:
-            label = (opt.get("option") or {}).get("text") or opt.get("id", "?")
+            option_id = opt.get("optionId") or opt.get("id")
+            label = opt.get("name") or opt.get("optionId") or "?"
             buttons.append(
-                [InlineKeyboardButton(label[:60], callback_data=f"p:{opt['id']}")]
+                [InlineKeyboardButton(label[:60], callback_data=f"p:{option_id}")]
             )
         buttons.append(
             [InlineKeyboardButton("Annuler", callback_data="p:__cancel__")]

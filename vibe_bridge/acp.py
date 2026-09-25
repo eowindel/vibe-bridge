@@ -135,7 +135,13 @@ class AcpAgent:
             if self.on_permission is None:
                 await self._respond(msg["id"], error=_METHOD_NOT_FOUND)
                 return
-            outcome = await _maybe_await(self.on_permission, msg.get("params", {}))
+            try:
+                outcome = await _maybe_await(self.on_permission, msg.get("params", {}))
+            except Exception:
+                # Ne jamais laisser une permission sans réponse : l'agent
+                # resterait suspendu indéfiniment (leçon du 25/09).
+                log.exception("erreur dans le gestionnaire de permission")
+                outcome = None
             if outcome is None:
                 result: dict[str, Any] = {"outcome": {"outcome": "cancelled"}}
             else:
