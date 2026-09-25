@@ -38,7 +38,7 @@ PROMPT_TIMEOUT = float(os.environ.get("VIBE_BRIDGE_PROMPT_TIMEOUT", "900"))
 WORKSPACE = os.environ.get("VIBE_BRIDGE_WORKSPACE", "/home/vibe/workspace")
 AGENT_COMMAND = os.environ.get("ACP_AGENT_COMMAND", "vibe-acp")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
-TRANSCRIBE_MODEL = os.environ.get("VIBE_BRIDGE_TRANSCRIBE_MODEL", "voxtral")
+TRANSCRIBE_MODEL = os.environ.get("VIBE_BRIDGE_TRANSCRIBE_MODEL", "voxtral-mini-latest")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_USER_IDS = {
     int(x)

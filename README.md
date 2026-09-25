@@ -27,7 +27,7 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré (`vibe_bridg
 | `TELEGRAM_ALLOWED_USER_IDS` | oui | — |
 | `ACP_AGENT_COMMAND` | non | `vibe-acp` |
 | `VIBE_BRIDGE_WORKSPACE` | non | `/home/vibe/workspace` |
-| `VIBE_BRIDGE_TRANSCRIBE_MODEL` | non | `voxtral` |
+| `VIBE_BRIDGE_TRANSCRIBE_MODEL` | non | `voxtral-mini-latest` |
 | `MISTRAL_API_KEY` | pour les notes vocales | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
 | `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |
