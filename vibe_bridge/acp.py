@@ -75,9 +75,12 @@ class AcpAgent:
                 "cwd": self.cwd,
                 "mcpServers": [],
             })
+            # LoadSessionResponse n'a pas de sessionId : la session reprise
+            # garde l'identifiant qu'on vient de passer.
+            self.session_id = result.get("sessionId") or load_session_id
         else:
             result = await self._request("session/new", {"cwd": self.cwd, "mcpServers": []})
-        self.session_id = result.get("sessionId")
+            self.session_id = result.get("sessionId")
         if not self.session_id:
             raise AcpError("session/new/load sans sessionId")
         log.info("session ACP ouverte : %s%s", self.session_id,
