@@ -41,6 +41,7 @@ on stdio), with no intermediate SDK — the ACP client is built in
 - `/mode` — session mode as buttons (ask / accept-edits / auto-approve)
 - `/model` — session model as buttons
 - `/session` — current state — `/stop` — interrupt and clear the queue
+- `/language` — switch the bridge language (buttons, persisted)
 - `/doctor` — full diagnostic: bridge (uptime, errors, timeout retries),
   Telegram token, Mistral key, agent (session, mode, model), cycle, and
   container RAM/swap/disk. Answers even with no active session.
@@ -75,7 +76,7 @@ on stdio), with no intermediate SDK — the ACP client is built in
 | `VIBE_BRIDGE_STDIO_LIMIT` | no | `33554432` (bytes) |
 | `MISTRAL_API_KEY` | for voice notes | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | no | `900` (seconds) |
-| `VIBE_BRIDGE_LANG` | no | `fr` (`en` available) |
+| `VIBE_BRIDGE_LANG` | no | `fr` — initial language; `/language` switches at runtime and persists |
 | `VIBE_BRIDGE_LOG_LEVEL` | no | `INFO` |
 
 ## Agent identity and memory (outside the bridge, on the vibe-acp side)

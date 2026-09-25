@@ -40,6 +40,7 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré
 - `/mode` — mode de la session en boutons (ask / accept-edits / auto-approve)
 - `/model` — modèle de la session en boutons
 - `/session` — état courant — `/stop` — interrompre et vider la file
+- `/language` — changer la langue du pont (boutons, persiste)
 - `/doctor` — diagnostic complet : pont (uptime, erreurs, reprises timeout),
   token Telegram, clé Mistral, agent (session, mode, modèle), cycle, et
   RAM/swap/disque du conteneur. Répond même sans session active.
@@ -74,7 +75,7 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré
 | `VIBE_BRIDGE_STDIO_LIMIT` | non | `33554432` (octets) |
 | `MISTRAL_API_KEY` | pour les notes vocales | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
-| `VIBE_BRIDGE_LANG` | non | `fr` (`en` disponible) |
+| `VIBE_BRIDGE_LANG` | non | `fr` — langue initiale ; `/language` change a chaud et persiste |
 | `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |
 
 ## Identité et mémoire de l'agent (hors pont, côté vibe-acp)
