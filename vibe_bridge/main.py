@@ -6,6 +6,7 @@ Une session ACP par chat autorisé, prompts traités un à la fois (file).
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 import os
@@ -45,6 +46,10 @@ ALLOWED_USER_IDS = {
     for x in os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "").replace(",", " ").split()
     if x
 }
+
+
+def text_block(text: str) -> dict:
+    return {"type": "text", "text": text}
 
 
 async def tg_call(fn: Any, *args: Any, retries: int = 3, **kwargs: Any) -> Any:
@@ -373,9 +378,9 @@ class ChatSession:
             self.redirect_pending = True
             with contextlib.suppress(Exception):
                 await self.agent.cancel()
-            self.queue.put_nowait(text)  # traité dès la fin du cycle annulé
+            self.queue.put_nowait([text_block(text)])  # traité dès la fin du cycle annulé
         else:
-            self.queue.put_nowait(text)
+            self.queue.put_nowait([text_block(text)])
 
     async def interrupt(self) -> int:
         """/stop : annule le cycle courant et vide la file."""
@@ -419,6 +424,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "vibe-bridge — pilotage de Vibe par Telegram\n\n"
             "Un message = un prompt (file d'attente si l'agent est occupé).\n"
             "Une note vocale = transcription puis prompt.\n\n"
+            "Une image = analysée (sa légende sert de consigne).\n"
             "/new — nouvelle session\n"
             "/session — état de la session\n"
             "/stop — interrompre le cycle et vider la file\n"
@@ -573,10 +579,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception:
         return  # le message d'erreur a déjà été envoyé par start_session
     if s.busy:
-        s.queue.put_nowait(text)
+        s.queue.put_nowait([text_block(text)])
         await s.send("… mis en file d'attente")
     else:
-        s.queue.put_nowait(text)
+        s.queue.put_nowait([text_block(text)])
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -624,10 +630,61 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 text=f"🎙 {text[:1000]}",
             )
     if s.busy:
-        s.queue.put_nowait(text)
+        s.queue.put_nowait([text_block(text)])
         await s.send("… mis en file d'attente")
     else:
-        s.queue.put_nowait(text)
+        s.queue.put_nowait([text_block(text)])
+
+
+async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Photo ou image en pièce jointe -> bloc image ACP + légende en consigne."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    msg = update.message
+    media = msg.photo[-1] if msg.photo else getattr(msg, "document", None)
+    if media is None:
+        return
+    caption = (msg.caption or "").strip() or "Décris cette image."
+    try:
+        await s.ensure_session()
+    except Exception:
+        return
+    status_id = await s.send("🖼 image reçue…")
+    try:
+        tg_file = await tg_call(context.bot.get_file, media.file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+        mime = getattr(media, "mime_type", None) or "image/jpeg"
+        blocks = [
+            {
+                "type": "image",
+                "data": base64.b64encode(data).decode("ascii"),
+                "mimeType": mime,
+            },
+            text_block(caption),
+        ]
+    except Exception as e:
+        log.exception("échec de téléchargement de l'image")
+        if status_id:
+            with contextlib.suppress(TelegramError):
+                await tg_call(
+                    context.bot.edit_message_text,
+                    chat_id=s.chat_id, message_id=status_id,
+                    text=f"[image impossible : {e}]",
+                )
+        return
+    if status_id:
+        with contextlib.suppress(TelegramError):
+            await tg_call(
+                context.bot.edit_message_text,
+                chat_id=s.chat_id, message_id=status_id,
+                text=f"🖼 {caption[:300]}",
+            )
+    if s.busy:
+        s.queue.put_nowait(blocks)
+        await s.send("… mis en file d'attente")
+    else:
+        s.queue.put_nowait(blocks)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -728,6 +785,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["interrupt", "i"], cmd_interrupt))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_image))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.add_error_handler(on_error)
     log.info(

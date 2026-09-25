@@ -232,14 +232,15 @@ class AcpAgent:
 
     # -- haut niveau ----------------------------------------------------------
 
-    async def prompt(self, text: str, timeout: float = 900.0) -> dict:
+    async def prompt(self, blocks: list[dict], timeout: float = 900.0) -> dict:
+        """blocks : liste de ContentBlock ACP (text, image...)."""
         if self.dead:
-            raise AcpError("agent arrête")
+            raise AcpError("agent arrêté")
         if not self.session_id:
             raise AcpError("aucune session ACP ouverte")
         return await self._request("session/prompt", {
             "sessionId": self.session_id,
-            "prompt": [{"type": "text", "text": text}],
+            "prompt": blocks,
         }, timeout=timeout)
 
     async def set_config_option(self, config_id: str, value: str) -> None:
