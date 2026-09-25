@@ -48,12 +48,38 @@ ALLOWED_USER_IDS = {
 }
 
 
-LANG = os.environ.get("VIBE_BRIDGE_LANG", "fr")
+LANG_FILE = os.path.expanduser("~/.vibe-bridge.lang")
 
+
+def _load_lang() -> str:
+    """VIBE_BRIDGE_LANG, ecrasee par le dernier choix /language (fichier)."""
+    lang = os.environ.get("VIBE_BRIDGE_LANG", "fr")
+    try:
+        with open(LANG_FILE, encoding="ascii") as f:
+            saved = f.read().strip()
+        if saved in ("fr", "en"):
+            lang = saved
+    except OSError:
+        pass
+    return lang
+
+
+def set_lang(lang: str) -> None:
+    """Change la langue du pont et la persiste pour les redemarrages."""
+    global LANG
+    LANG = lang
+    try:
+        with open(LANG_FILE, "w", encoding="ascii") as f:
+            f.write(lang)
+    except OSError:
+        log.warning("impossible de persister la langue : %s", LANG_FILE)
+
+
+LANG = _load_lang()
 
 
 def L(fr: str, en: str) -> str:
-    """Message visible cote Telegram, selon VIBE_BRIDGE_LANG (fr par defaut)."""
+    """Message visible cote Telegram, selon la langue du pont."""
     return en if LANG == "en" else fr
 
 
@@ -456,7 +482,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/session — état de la session\n"
             "/stop — interrompre le cycle et vider la file\n"
             "/interrupt <consigne> — arrêter le cycle en cours et le remplacer "
-            "(alias /i)\n",
+            "(alias /i)\n"
+            "/language — langue du pont\n",
             "vibe-bridge — drive Vibe from Telegram\n\n"
             "One message = one prompt (queued if the agent is busy).\n"
             "A voice note is transcribed then sent as a prompt.\n"
@@ -466,7 +493,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/session — session state\n"
             "/stop — interrupt the cycle and clear the queue\n"
             "/interrupt <instruction> — stop the current cycle and replace it "
-            "(alias /i)\n",
+            "(alias /i)\n"
+            "/language — bridge language\n",
         ),
     )
 
@@ -671,6 +699,21 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await s.send(L("Modèle de la session :", "Session model:"), reply_markup=InlineKeyboardMarkup(buttons))
 
 
+async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/language : choisit la langue du pont (persiste entre redemarrages)."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    buttons = [
+        [InlineKeyboardButton(f"{'●' if LANG == 'fr' else '○'} Français",
+                              callback_data="lang:fr")],
+        [InlineKeyboardButton(f"{'●' if LANG == 'en' else '○'} English",
+                              callback_data="lang:en")],
+    ]
+    await s.send(L("Langue du pont :", "Bridge language:"),
+                  reply_markup=InlineKeyboardMarkup(buttons))
+
+
 async def cmd_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/interrupt <consigne> (alias /i) : arrête le cycle en cours et
     le remplace immédiatement par cette consigne, même session."""
@@ -825,6 +868,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if s is None:
         return
     data = query.data or ""
+    if data.startswith("lang:"):
+        target = data[4:]
+        if target in ("fr", "en"):
+            set_lang(target)
+            with contextlib.suppress(TelegramError):
+                await _register_commands(context.bot)
+        label = "français" if target == "fr" else "English"
+        with contextlib.suppress(TelegramError):
+            await query.edit_message_text(L(f"langue : {label}", f"language: {label}"))
+        return
     if data.startswith("m:") or data.startswith("v:"):
         prefix, target = data[:2], data[2:]
         config_id = "mode" if prefix == "m:" else "model"
@@ -876,11 +929,11 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
-async def _post_init(app: Application) -> None:
-    """Enregistre le menu de commandes Telegram du pont (setMyCommands
-    persiste par bot — sans ça, l'ancien bot gardait son menu affiché)."""
+async def _register_commands(bot: Any) -> None:
+    """Enregistre le menu de commandes Telegram (setMyCommands persiste
+    par bot ; rappele apres un /language pour rafraichir les descriptions)."""
     with contextlib.suppress(TelegramError):
-        await app.bot.set_my_commands([
+        await bot.set_my_commands([
             BotCommand("new", L("nouvelle session", "new session")),
             BotCommand("resume", L("reprendre une session passée", "resume a past session")),
             BotCommand("mode", L("changer le mode (ask, auto...)", "change the mode (ask, auto...)")),
@@ -890,7 +943,12 @@ async def _post_init(app: Application) -> None:
             BotCommand("stop", L("interrompre et vider la file", "interrupt and clear the queue")),
             BotCommand("interrupt", L("rediriger l'agent en pleine tâche", "redirect the agent mid-task")),
             BotCommand("start", L("aide", "help")),
+            BotCommand("language", L("changer la langue", "change the language")),
         ])
+
+
+async def _post_init(app: Application) -> None:
+    await _register_commands(app.bot)
 
 
 def main() -> None:
@@ -914,6 +972,7 @@ def main() -> None:
     app.add_handler(CommandHandler("doctor", cmd_doctor))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler(["interrupt", "i"], cmd_interrupt))
+    app.add_handler(CommandHandler("language", cmd_language))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_image))
