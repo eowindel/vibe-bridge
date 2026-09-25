@@ -37,6 +37,8 @@ PERMISSION_TIMEOUT = 300.0  # secondes avant auto-refus d'une permission
 PROMPT_TIMEOUT = float(os.environ.get("VIBE_BRIDGE_PROMPT_TIMEOUT", "900"))
 WORKSPACE = os.environ.get("VIBE_BRIDGE_WORKSPACE", "/home/vibe/workspace")
 AGENT_COMMAND = os.environ.get("ACP_AGENT_COMMAND", "vibe-acp")
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+TRANSCRIBE_MODEL = os.environ.get("VIBE_BRIDGE_TRANSCRIBE_MODEL", "voxtral")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_USER_IDS = {
     int(x)
@@ -63,6 +65,22 @@ async def tg_call(fn: Any, *args: Any, retries: int = 3, **kwargs: Any) -> Any:
                 await asyncio.sleep(1.5 * (attempt + 1))
                 continue
             raise
+
+
+async def transcribe_audio(data: bytes, filename: str) -> str:
+    """Transcription d'un audio via l'API Voxtral de Mistral."""
+    if not MISTRAL_API_KEY:
+        raise RuntimeError("MISTRAL_API_KEY absente du pont")
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            "https://api.mistral.ai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {MISTRAL_API_KEY}"},
+            data={"model": TRANSCRIBE_MODEL},
+            files={"file": (filename, data, "audio/ogg")},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"API transcription {resp.status_code} : {resp.text[:200]}")
+    return (resp.json().get("text") or "").strip()
 
 
 class ChatSession:
@@ -430,6 +448,56 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         s.queue.put_nowait(text)
 
 
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Note vocale (ou fichier audio) -> transcription Voxtral -> prompt."""
+    s = session_for(update, context)
+    if s is None:
+        return
+    media = update.message.voice or update.message.audio
+    if media is None:
+        return
+    try:
+        await s.ensure_session()
+    except Exception:
+        return
+    status_id = await s.send("🎙 transcription…")
+    try:
+        tg_file = await tg_call(context.bot.get_file, media.file_id)
+        data = bytes(await tg_file.download_as_bytearray())
+        text = await transcribe_audio(data, media.file_name or "note.oga")
+    except Exception as e:
+        log.exception("échec de transcription")
+        if status_id:
+            with contextlib.suppress(TelegramError):
+                await tg_call(
+                    context.bot.edit_message_text,
+                    chat_id=s.chat_id, message_id=status_id,
+                    text=f"[transcription impossible : {e}]",
+                )
+        return
+    if not text:
+        if status_id:
+            with contextlib.suppress(TelegramError):
+                await tg_call(
+                    context.bot.edit_message_text,
+                    chat_id=s.chat_id, message_id=status_id,
+                    text="[silence : rien de transcrit]",
+                )
+        return
+    if status_id:
+        with contextlib.suppress(TelegramError):
+            await tg_call(
+                context.bot.edit_message_text,
+                chat_id=s.chat_id, message_id=status_id,
+                text=f"🎙 {text[:1000]}",
+            )
+    if s.busy:
+        s.queue.put_nowait(text)
+        await s.send("… mis en file d'attente")
+    else:
+        s.queue.put_nowait(text)
+
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     s = session_for(update, context)
@@ -481,6 +549,7 @@ def main() -> None:
     app.add_handler(CommandHandler("session", cmd_session))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.add_error_handler(on_error)
     log.info(

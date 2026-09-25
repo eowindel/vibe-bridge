@@ -8,8 +8,12 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré (`vibe_bridg
 
 - Une session ACP par chat, prompts en file (un à la fois)
 - Streaming de la réponse édité en place, découpe automatique à 3800 caractères
+- Réflexion du modèle affichée pendant les générations longues
 - Demandes de permission de l'agent -> boutons inline (Autoriser / Annuler),
   auto-refus après 5 minutes
+- **Notes vocales et fichiers audio** : transcription via l'API Voxtral de
+  Mistral (requiert `MISTRAL_API_KEY` dans l'environnement), le texte
+  transcrit devient le prompt
 - Reprise automatique des timeouts de connexion Telegram (requête jamais
   partie = aucun risque de doublon)
 - Allowlist stricte : `TELEGRAM_ALLOWED_USER_IDS` obligatoire
@@ -23,6 +27,8 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré (`vibe_bridg
 | `TELEGRAM_ALLOWED_USER_IDS` | oui | — |
 | `ACP_AGENT_COMMAND` | non | `vibe-acp` |
 | `VIBE_BRIDGE_WORKSPACE` | non | `/home/vibe/workspace` |
+| `VIBE_BRIDGE_TRANSCRIBE_MODEL` | non | `voxtral` |
+| `MISTRAL_API_KEY` | pour les notes vocales | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
 | `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |
 
