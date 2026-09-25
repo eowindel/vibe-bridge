@@ -75,6 +75,7 @@ class ChatSession:
         self.worker: asyncio.Task[None] | None = None
         self.status_msg_id: int | None = None
         self.activity: str = ""
+        self.thought: str = ""
         self.text: str = ""
         self.last_edit: float = 0.0
         self.busy = False
@@ -101,8 +102,12 @@ class ChatSession:
         if now - self.last_edit < EDIT_MIN_INTERVAL:
             return
         self.last_edit = now
-        prefix = f"⚙ {self.activity}\n\n" if self.activity else "… "
-        body = (prefix + (self.text or "…"))[-4000:]
+        if self.text:
+            body = self.text[-4000:]
+        elif self.activity:
+            body = f"⚙ {self.activity}"[:4000]
+        else:
+            body = "…"
         if self.status_msg_id is None:
             self.status_msg_id = await self.send(body)
             return
@@ -152,10 +157,19 @@ class ChatSession:
             if content.get("type") == "text":
                 self.text += content.get("text", "")
                 await self.refresh_status()
+        elif kind == "agent_thought_chunk":
+            # Aperçu de la réflexion du modèle : preuve de vie pendant les
+            # longues générations (derniers ~200 caractères accumulés).
+            content = update.get("content", {})
+            if content.get("type") == "text" and content.get("text"):
+                self.thought = (self.thought + content["text"])[-200:]
+                self.activity = "💭 " + self.thought.replace("\n", " ").strip()[-90:]
+                await self.refresh_status()
         elif kind in ("tool_call", "tool_call_update"):
             title = update.get("title") or update.get("kind")
             if title:
                 self.activity = str(title)
+                self.thought = ""
                 await self.refresh_status()
         # plan, available_commands_update, etc. : ignorés en v1
 
@@ -249,6 +263,7 @@ class ChatSession:
                 return
             self.busy = True
             self.text = ""
+            self.thought = ""
             self.activity = ""
             self.status_msg_id = None
             self.last_edit = 0.0
