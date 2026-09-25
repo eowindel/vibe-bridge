@@ -119,6 +119,7 @@ EnvironmentFile=/home/vibe/.vibe/.env
 ExecStart=/home/vibe/vibe-bridge/.venv/bin/vibe-bridge
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

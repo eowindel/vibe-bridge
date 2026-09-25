@@ -957,6 +957,16 @@ async def _post_init(app: Application) -> None:
     await _register_commands(app.bot)
 
 
+async def _post_shutdown(app: Application) -> None:
+    """Extinction propre : fermer chaque session (worker, lecteur,
+    process agent). Sans ça, les taches en attente et l'enfant vibe-acp
+    laissent le service pendre jusqu'au SIGKILL de systemd."""
+    sessions: dict[int, ChatSession] = app.bot_data.get("sessions", {})
+    for s in sessions.values():
+        with contextlib.suppress(Exception):
+            await s._stop_everything()
+
+
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("VIBE_BRIDGE_LOG_LEVEL", "INFO"),
@@ -968,7 +978,10 @@ def main() -> None:
         raise SystemExit("TELEGRAM_BOT_TOKEN manquant")
     if not ALLOWED_USER_IDS:
         raise SystemExit("TELEGRAM_ALLOWED_USER_IDS manquant (allowlist obligatoire)")
-    app: Application = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
+    app: Application = (ApplicationBuilder().token(BOT_TOKEN)
+                               .post_init(_post_init)
+                               .post_shutdown(_post_shutdown)
+                               .build())
     app.add_handler(CommandHandler(["start", "help"], cmd_help))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("resume", cmd_resume))
