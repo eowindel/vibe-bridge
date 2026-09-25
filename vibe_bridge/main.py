@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.error import TelegramError, TimedOut
+from telegram.error import BadRequest, TelegramError, TimedOut
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -28,7 +28,7 @@ from telegram.ext import (
 
 from . import __version__
 from .acp import AcpAgent, AcpError
-from .formatting import split_message
+from .formatting import md_to_html, split_message
 
 log = logging.getLogger("vibe_bridge")
 
@@ -118,36 +118,58 @@ class ChatSession:
                 chat_id=self.chat_id, message_id=self.status_msg_id, text=body,
             )
 
+    async def _deliver(self, text: str, edit_status: bool = False) -> None:
+        """Livraison riche : HTML d'abord, repli texte brut si Telegram refuse.
+        edit_status=True remplace le message de statut courant au lieu d'envoyer."""
+        html_text = md_to_html(text)[:4000]
+        plain_text = text[:4000]
+        if edit_status and self.status_msg_id is not None:
+            mid = self.status_msg_id
+            self.status_msg_id = None
+            try:
+                await tg_call(
+                    self.bot.edit_message_text, chat_id=self.chat_id,
+                    message_id=mid, text=html_text, parse_mode="HTML",
+                )
+                return
+            except BadRequest:
+                pass
+            try:
+                await tg_call(
+                    self.bot.edit_message_text, chat_id=self.chat_id,
+                    message_id=mid, text=plain_text,
+                )
+                return
+            except TelegramError:
+                pass  # édition impossible : envoyer en message neuf
+        try:
+            await tg_call(
+                self.bot.send_message, chat_id=self.chat_id,
+                text=html_text, parse_mode="HTML",
+            )
+        except BadRequest:
+            await self.send(plain_text)
+
     async def finalize(self) -> None:
         """Dernier rendu : la réponse remplace le statut, découpée si longue."""
         parts = split_message(self.text)
         if parts == [""]:
             parts = []  # réponse vide : ne jamais éditer avec un texte vide
-        if self.status_msg_id is None:
-            for part in parts:
-                await self.send(part)
-            if not parts:
-                await self.send("(fin de cycle, pas de réponse texte)")
+        if not parts:
+            text = "(fin de cycle, pas de réponse texte)"
+            if self.status_msg_id is not None:
+                mid = self.status_msg_id
+                self.status_msg_id = None
+                with contextlib.suppress(TelegramError):
+                    await tg_call(
+                        self.bot.edit_message_text, chat_id=self.chat_id,
+                        message_id=mid, text=text,
+                    )
+            else:
+                await self.send(text)
             return
-        if parts:
-            try:
-                await tg_call(
-                    self.bot.edit_message_text,
-                    chat_id=self.chat_id, message_id=self.status_msg_id,
-                    text=parts[0][:4000],
-                )
-            except TelegramError:
-                await self.send(parts[0])
-            for part in parts[1:]:
-                await self.send(part)
-        else:
-            with contextlib.suppress(TelegramError):
-                await tg_call(
-                    self.bot.edit_message_text,
-                    chat_id=self.chat_id, message_id=self.status_msg_id,
-                    text="(fin de cycle, pas de réponse texte)",
-                )
-        self.status_msg_id = None
+        for i, part in enumerate(parts):
+            await self._deliver(part, edit_status=(i == 0))
 
     # -- callbacks ACP ----------------------------------------------------------
 
