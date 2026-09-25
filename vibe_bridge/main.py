@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatAction
 from telegram.error import TelegramError, TimedOut
 from telegram.ext import (
     Application,
@@ -256,6 +257,17 @@ class ChatSession:
         self.worker = asyncio.create_task(self.run_worker())
         await self.send(f"🟢 session ouverte ({str(agent.session_id)[:8]}…)")
 
+    async def _keep_typing(self) -> None:
+        """Indicateur 'typing…' en haut du chat, renouvelé pendant le cycle
+        (l'action Telegram n'affiche que ~5 s par envoi)."""
+        while True:
+            with contextlib.suppress(TelegramError):
+                await tg_call(
+                    self.bot.send_chat_action,
+                    chat_id=self.chat_id, action=ChatAction.TYPING,
+                )
+            await asyncio.sleep(4.0)
+
     async def run_worker(self) -> None:
         while True:
             item = await self.queue.get()
@@ -272,6 +284,7 @@ class ChatSession:
                 self.busy = False
                 return
             try:
+                typing_task = asyncio.create_task(self._keep_typing())
                 result = await agent.prompt(item, timeout=PROMPT_TIMEOUT)
                 await self.finalize()
                 stop = result.get("stopReason")
@@ -294,6 +307,9 @@ class ChatSession:
                 await self.finalize()
                 await self.send("[erreur inattendue, voir les logs]")
             finally:
+                typing_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await typing_task
                 self.busy = False
 
     async def interrupt(self) -> int:
