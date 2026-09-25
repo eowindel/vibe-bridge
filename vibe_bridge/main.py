@@ -48,6 +48,15 @@ ALLOWED_USER_IDS = {
 }
 
 
+LANG = os.environ.get("VIBE_BRIDGE_LANG", "fr")
+
+
+
+def L(fr: str, en: str) -> str:
+    """Message visible cote Telegram, selon VIBE_BRIDGE_LANG (fr par defaut)."""
+    return en if LANG == "en" else fr
+
+
 # Statistiques internes pour /doctor.
 STATS = {
     "started_at": time.time(),
@@ -88,7 +97,7 @@ async def tg_call(fn: Any, *args: Any, retries: int = 3, **kwargs: Any) -> Any:
 async def transcribe_audio(data: bytes, filename: str) -> str:
     """Transcription d'un audio via l'API Voxtral de Mistral."""
     if not MISTRAL_API_KEY:
-        raise RuntimeError("MISTRAL_API_KEY absente du pont")
+        raise RuntimeError(L("MISTRAL_API_KEY absente du pont", "MISTRAL_API_KEY missing from the bridge"))
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
             "https://api.mistral.ai/v1/audio/transcriptions",
@@ -195,7 +204,7 @@ class ChatSession:
         if parts == [""]:
             parts = []  # réponse vide : ne jamais éditer avec un texte vide
         if not parts:
-            text = "(fin de cycle, pas de réponse texte)"
+            text = L("(fin de cycle, pas de réponse texte)", "(cycle ended, no text reply)")
             if self.status_msg_id is not None:
                 mid = self.status_msg_id
                 self.status_msg_id = None
@@ -248,11 +257,11 @@ class ChatSession:
                 [InlineKeyboardButton(label[:60], callback_data=f"p:{option_id}")]
             )
         buttons.append(
-            [InlineKeyboardButton("Annuler", callback_data="p:__cancel__")]
+            [InlineKeyboardButton(L("Annuler", "Cancel"), callback_data="p:__cancel__")]
         )
-        label = self.activity or "Action de l'agent"
+        label = self.activity or L("Action de l'agent", "Agent action")
         msg_id = await self.send(
-            f"🔐 {label}\nAutoriser ?",
+            L(f"🔐 {label}\nAutoriser ?", f"🔐 {label}\nAllow?"),
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         if msg_id is None:
@@ -266,7 +275,7 @@ class ChatSession:
                 await tg_call(
                     self.bot.edit_message_text,
                     chat_id=self.chat_id, message_id=msg_id,
-                    text="🔐 délai dépassé — refusé",
+                    text=L("🔐 délai dépassé — refusé", "🔐 timed out — denied"),
                 )
             return None
         finally:
@@ -319,12 +328,12 @@ class ChatSession:
         try:
             await agent.start(load_session_id=load_session_id)
         except Exception as e:
-            await self.send(f"[impossible de démarrer l'agent : {e}]")
+            await self.send(L(f"[impossible de démarrer l'agent : {e}]", f"[cannot start the agent: {e}]"))
             raise
         self.agent = agent
         self.queue = asyncio.Queue()
         self.worker = asyncio.create_task(self.run_worker())
-        label = "↩️ session reprise" if load_session_id else "🟢 session ouverte"
+        label = L("↩️ session reprise", "↩️ session resumed") if load_session_id else L("🟢 session ouverte", "🟢 session opened")
         await self.send(f"{label} ({str(agent.session_id)[:8]}…)")
 
     async def _keep_typing(self) -> None:
@@ -360,25 +369,27 @@ class ChatSession:
                 stop = result.get("stopReason")
                 if stop == "cancelled" and self.redirect_pending:
                     self.redirect_pending = False
-                    await self.send("↪️ interrompu — nouvelle consigne en cours…")
+                    await self.send(L("↪️ interrompu — nouvelle consigne en cours…", "↪️ interrupted — new instruction in progress…"))
                 elif stop and stop != "end_turn":
-                    await self.send(f"[cycle terminé : {stop}]")
+                    await self.send(L(f"[cycle terminé : {stop}]", f"[cycle ended: {stop}]"))
             except asyncio.TimeoutError:
                 with contextlib.suppress(Exception):
                     await agent.cancel()
                 await self.finalize()
-                await self.send("[délai dépassé, cycle annulé]")
+                await self.send(L("[délai dépassé, cycle annulé]", "[timed out, cycle cancelled]"))
             except AcpError as e:
                 self.agent = None
                 await self.finalize()
-                await self.send(
+                await self.send(L(
                     f"[erreur agent : {e}]\n"
-                    "Session arrêtée — renvoie un message pour en ouvrir une nouvelle."
-                )
+                    "Session arrêtée — renvoie un message pour en ouvrir une nouvelle.",
+                    f"[agent error: {e}]\n"
+                    "Session stopped — send a message to open a new one."
+                ))
             except Exception:
                 log.exception("cycle en échec")
                 await self.finalize()
-                await self.send("[erreur inattendue, voir les logs]")
+                await self.send(L("[erreur inattendue, voir les logs]", "[unexpected error, see logs]"))
             finally:
                 typing_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -435,17 +446,27 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await tg_call(
         context.bot.send_message,
         chat_id=update.effective_chat.id,
-        text=(
+        text=L(
             "vibe-bridge — pilotage de Vibe par Telegram\n\n"
             "Un message = un prompt (file d'attente si l'agent est occupé).\n"
-            "Une note vocale = transcription puis prompt.\n\n"
-            "Une image = analysée (sa légende sert de consigne).\n"
+            "Une note vocale = transcription puis prompt.\n"
+            "Une image = analysée (sa légende sert de consigne).\n\n"
             "/new — nouvelle session\n"
             "/doctor — diagnostic du pont\n"
             "/session — état de la session\n"
             "/stop — interrompre le cycle et vider la file\n"
             "/interrupt <consigne> — arrêter le cycle en cours et le remplacer "
-            "(alias /i)\n"
+            "(alias /i)\n",
+            "vibe-bridge — drive Vibe from Telegram\n\n"
+            "One message = one prompt (queued if the agent is busy).\n"
+            "A voice note is transcribed then sent as a prompt.\n"
+            "An image is analyzed (its caption is the instruction).\n\n"
+            "/new — new session\n"
+            "/doctor — bridge diagnostics\n"
+            "/session — session state\n"
+            "/stop — interrupt the cycle and clear the queue\n"
+            "/interrupt <instruction> — stop the current cycle and replace it "
+            "(alias /i)\n",
         ),
     )
 
@@ -462,14 +483,17 @@ async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if s is None:
         return
     if not s.agent:
-        await s.send("aucune session ouverte")
+        await s.send(L("aucune session ouverte", "no open session"))
         return
-    state = "occupé" if s.busy else "inactif"
-    await s.send(
+    state = L("occupé", "busy") if s.busy else L("inactif", "idle")
+    await s.send(L(
         f"session {s.agent.session_id}\n"
         f"état : {state}\n"
-        f"file d'attente : {s.queue.qsize()}"
-    )
+        f"file d'attente : {s.queue.qsize()}",
+        f"session {s.agent.session_id}\n"
+        f"state: {state}\n"
+        f"queue: {s.queue.qsize()}"
+    ))
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -477,7 +501,7 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if s is None:
         return
     drained = await s.interrupt()
-    await s.send(f"[cycle interrompu, {drained} message(s) retirés de la file]")
+    await s.send(L(f"[cycle interrompu, {drained} message(s) retirés de la file]", f"[cycle interrupted, {drained} message(s) removed from the queue]"))
 
 
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -492,12 +516,12 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         sessions = await s.agent.list_sessions()
     except Exception as e:
-        await s.send(f"[impossible de lister les sessions : {e}]")
+        await s.send(L(f"[impossible de lister les sessions : {e}]", f"[cannot list sessions: {e}]"))
         return
     current = s.agent.session_id if s.agent else None
     entries = [e for e in sessions if e.get("sessionId") != current][:8]
     if not entries:
-        await s.send("aucune autre session à reprendre")
+        await s.send(L("aucune autre session à reprendre", "no other session to resume"))
         return
     buttons = []
     for e in entries:
@@ -507,10 +531,14 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"{title} — {date}",
             callback_data=f"r:{e['sessionId']}",
         )])
-    buttons.append([InlineKeyboardButton("Annuler", callback_data="r:__cancel__")])
+    buttons.append([InlineKeyboardButton(L("Annuler", "Cancel"), callback_data="r:__cancel__")])
     await s.send(
-        "Sessions récentes — laquelle reprendre ?\n"
-        "(la reprise remplace la session courante)",
+        L(
+            "Sessions récentes — laquelle reprendre ?\n"
+            "(la reprise remplace la session courante)",
+            "Recent sessions — which one to resume?\n"
+            "(resuming replaces the current session)",
+        ),
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -533,7 +561,7 @@ def _read_meminfo() -> tuple[int, int, int]:
 
 def _fmt_age(ts: float) -> str:
     if not ts:
-        return "jamais"
+        return L("jamais", "never")
     d = time.time() - ts
     if d < 60:
         return f"{int(d)} s"
@@ -551,28 +579,30 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         me = await tg_call(context.bot.get_me)
         tg_line = f"token OK (@{me.username})"
     except Exception as e:
-        tg_line = f"[erreur : {e}]"
+        tg_line = L(f"[erreur : {e}]", f"[error: {e}]")
     if s.agent and not s.agent.dead:
         mode = s.agent.modes.get("currentModeId") or "?"
         opt = next((o for o in s.agent.config_options
                     if o.get("id") == "model"), {})
         model = opt.get("currentValue") or "?"
-        agent_line = (f"vivant — session {str(s.agent.session_id)[:8]}… — "
-                      f"mode {mode} — modèle {model}")
+        agent_line = (L(f"vivant — session {str(s.agent.session_id)[:8]}… — "
+                       f"mode {mode} — modèle {model}",
+                       f"alive — session {str(s.agent.session_id)[:8]}… — "
+                       f"mode {mode} — model {model}"))
     else:
-        agent_line = "aucun agent actif"
+        agent_line = L("aucun agent actif", "no active agent")
     used, total, swap = _read_meminfo()
-    ram_line = f"{used}/{total} Mio" if total > 0 else "?"
+    ram_line = L(f"{used}/{total} Mio", f"{used}/{total} MiB") if total > 0 else "?"
     try:
         st = os.statvfs("/")
         disk_total = st.f_blocks * st.f_frsize / 2**30
         disk_free = st.f_bavail * st.f_frsize / 2**30
-        disk_line = f"{disk_total - disk_free:.1f}/{disk_total:.0f} Go"
+        disk_line = L(f"{disk_total - disk_free:.1f}/{disk_total:.0f} Go", f"{disk_total - disk_free:.1f}/{disk_total:.0f} GiB")
     except OSError:
         disk_line = "?"
     uptime = time.time() - STATS["started_at"]
     h, m = int(uptime // 3600), int(uptime % 3600 // 60)
-    text = (
+    text = L(
         f"🩺 vibe-bridge {__version__} — diagnostic\n"
         f"├─ pont : actif depuis {h}h{m:02d} — erreurs : {STATS['errors']}\n"
         f"├─ Telegram : {tg_line} — reprises timeout : {STATS['tg_retries']}\n"
@@ -580,7 +610,15 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"dernier appel pont : {_fmt_age(STATS['mistral_last_ok'])}\n"
         f"├─ agent : {agent_line}\n"
         f"├─ cycle : {'occupé' if s.busy else 'inactif'} — file : {s.queue.qsize()}\n"
-        f"└─ CT : RAM {ram_line} — swap {swap} Mio — disque {disk_line}"
+        f"└─ CT : RAM {ram_line} — swap {swap} Mio — disque {disk_line}",
+        f"🩺 vibe-bridge {__version__} — diagnostics\n"
+        f"├─ bridge: up for {h}h{m:02d} — errors: {STATS['errors']}\n"
+        f"├─ Telegram: {tg_line} — timeout retries: {STATS['tg_retries']}\n"
+        f"├─ Mistral: key {'present' if MISTRAL_API_KEY else 'MISSING'} — "
+        f"last bridge call: {_fmt_age(STATS['mistral_last_ok'])}\n"
+        f"├─ agent: {agent_line}\n"
+        f"├─ cycle: {'busy' if s.busy else 'idle'} — queue: {s.queue.qsize()}\n"
+        f"└─ CT: RAM {ram_line} — swap {swap} MiB — disk {disk_line}"
     )
     await tg_call(context.bot.send_message,
                   chat_id=update.effective_chat.id, text=text)
@@ -597,7 +635,7 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     agent = s.agent
     if not agent or not agent.modes.get("availableModes"):
-        await s.send("aucun mode disponible")
+        await s.send(L("aucun mode disponible", "no modes available"))
         return
     current = agent.modes.get("currentModeId")
     buttons = []
@@ -605,8 +643,8 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         mark = "● " if m.get("id") == current else "○ "
         buttons.append([InlineKeyboardButton(
             f"{mark}{m.get('name') or m['id']}", callback_data=f"m:{m['id']}")])
-    buttons.append([InlineKeyboardButton("Annuler", callback_data="m:__cancel__")])
-    await s.send("Mode de la session :", reply_markup=InlineKeyboardMarkup(buttons))
+    buttons.append([InlineKeyboardButton(L("Annuler", "Cancel"), callback_data="m:__cancel__")])
+    await s.send(L("Mode de la session :", "Session mode:"), reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -621,7 +659,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent = s.agent
     opt = next((o for o in (agent.config_options or []) if o.get("id") == "model"), None)
     if not opt:
-        await s.send("aucun modèle configurable")
+        await s.send(L("aucun modèle configurable", "no configurable model"))
         return
     current = opt.get("currentValue")
     buttons = []
@@ -629,8 +667,8 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         mark = "● " if v.get("value") == current else "○ "
         label = f"{mark}{v.get('name') or v['value']}"
         buttons.append([InlineKeyboardButton(label[:60], callback_data=f"v:{v['value']}")])
-    buttons.append([InlineKeyboardButton("Annuler", callback_data="v:__cancel__")])
-    await s.send("Modèle de la session :", reply_markup=InlineKeyboardMarkup(buttons))
+    buttons.append([InlineKeyboardButton(L("Annuler", "Cancel"), callback_data="v:__cancel__")])
+    await s.send(L("Modèle de la session :", "Session model:"), reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def cmd_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -641,11 +679,14 @@ async def cmd_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     text = " ".join(context.args or []).strip()
     if not text:
-        await s.send(
+        await s.send(L(
             "Usage : /interrupt <consigne>\n"
             "Arrête le cycle en cours et enchaîne sur cette consigne "
-            "(l'agent garde le contexte de ce qu'il faisait)."
-        )
+            "(l'agent garde le contexte de ce qu'il faisait).",
+            "Usage: /interrupt <instruction>\n"
+            "Stops the current cycle and follows up with this instruction "
+            "(the agent keeps the context of what it was doing)."
+        ))
         return
     try:
         await s.ensure_session()
@@ -667,7 +708,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return  # le message d'erreur a déjà été envoyé par start_session
     if s.busy:
         s.queue.put_nowait([text_block(text)])
-        await s.send("… mis en file d'attente")
+        await s.send(L("… mis en file d'attente", "… queued"))
     else:
         s.queue.put_nowait([text_block(text)])
 
@@ -684,7 +725,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await s.ensure_session()
     except Exception:
         return
-    status_id = await s.send("🎙 transcription…")
+    status_id = await s.send(L("🎙 transcription…", "🎙 transcribing…"))
     try:
         tg_file = await tg_call(context.bot.get_file, media.file_id)
         data = bytes(await tg_file.download_as_bytearray())
@@ -697,7 +738,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await tg_call(
                     context.bot.edit_message_text,
                     chat_id=s.chat_id, message_id=status_id,
-                    text=f"[transcription impossible : {e}]",
+                    text=L(f"[transcription impossible : {e}]", f"[transcription failed: {e}]"),
                 )
         return
     if not text:
@@ -706,7 +747,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await tg_call(
                     context.bot.edit_message_text,
                     chat_id=s.chat_id, message_id=status_id,
-                    text="[silence : rien de transcrit]",
+                    text=L("[silence : rien de transcrit]", "[silence: nothing transcribed]"),
                 )
         return
     if status_id:
@@ -718,7 +759,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
     if s.busy:
         s.queue.put_nowait([text_block(text)])
-        await s.send("… mis en file d'attente")
+        await s.send(L("… mis en file d'attente", "… queued"))
     else:
         s.queue.put_nowait([text_block(text)])
 
@@ -732,12 +773,12 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     media = msg.photo[-1] if msg.photo else getattr(msg, "document", None)
     if media is None:
         return
-    caption = (msg.caption or "").strip() or "Décris cette image."
+    caption = (msg.caption or "").strip() or L("Décris cette image.", "Describe this image.")
     try:
         await s.ensure_session()
     except Exception:
         return
-    status_id = await s.send("🖼 image reçue…")
+    status_id = await s.send(L("🖼 image reçue…", "🖼 image received…"))
     try:
         tg_file = await tg_call(context.bot.get_file, media.file_id)
         data = bytes(await tg_file.download_as_bytearray())
@@ -757,7 +798,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await tg_call(
                     context.bot.edit_message_text,
                     chat_id=s.chat_id, message_id=status_id,
-                    text=f"[image impossible : {e}]",
+                    text=L(f"[image impossible : {e}]", f"[image failed: {e}]"),
                 )
         return
     if status_id:
@@ -769,7 +810,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
     if s.busy:
         s.queue.put_nowait(blocks)
-        await s.send("… mis en file d'attente")
+        await s.send(L("… mis en file d'attente", "… queued"))
     else:
         s.queue.put_nowait(blocks)
 
@@ -789,13 +830,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         config_id = "mode" if prefix == "m:" else "model"
         if target == "__cancel__":
             with contextlib.suppress(TelegramError):
-                await query.edit_message_text("annulé")
+                await query.edit_message_text(L("annulé", "cancelled"))
             return
         try:
             await s.agent.set_config_option(config_id, target)
         except Exception as e:
             with contextlib.suppress(TelegramError):
-                await query.edit_message_text(f"[échec : {e}]")
+                await query.edit_message_text(L(f"[échec : {e}]", f"[failed: {e}]"))
             return
         with contextlib.suppress(TelegramError):
             await query.edit_message_text(f"{config_id} : {target}")
@@ -804,10 +845,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         target = data[2:]
         if target == "__cancel__":
             with contextlib.suppress(TelegramError):
-                await query.edit_message_text("reprise annulée")
+                await query.edit_message_text(L("reprise annulée", "resume cancelled"))
             return
         with contextlib.suppress(TelegramError):
-            await query.edit_message_text("↩️ reprise de la session…")
+            await query.edit_message_text(L("↩️ reprise de la session…", "↩️ resuming session…"))
         await s.resume_session(target)
         return
     if not data.startswith("p:"):
@@ -818,7 +859,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     option = data[2:]
     # Retour visuel immédiat : les boutons disparaissent au clic.
     with contextlib.suppress(TelegramError):
-        label = "annulé" if option == "__cancel__" else option
+        label = L("annulé", "cancelled") if option == "__cancel__" else option
         await query.edit_message_text(f"🔐 permission : {label}")
     fut.set_result(None if option == "__cancel__" else option)
 
@@ -831,7 +872,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         with contextlib.suppress(Exception):
             await tg_call(
                 context.bot.send_message,
-                chat_id=chat.id, text="[erreur interne, voir les logs]",
+                chat_id=chat.id, text=L("[erreur interne, voir les logs]", "[internal error, see logs]"),
             )
 
 
@@ -840,15 +881,15 @@ async def _post_init(app: Application) -> None:
     persiste par bot — sans ça, l'ancien bot gardait son menu affiché)."""
     with contextlib.suppress(TelegramError):
         await app.bot.set_my_commands([
-            BotCommand("new", "nouvelle session"),
-            BotCommand("resume", "reprendre une session passée"),
-            BotCommand("mode", "changer le mode (ask, auto...)"),
-            BotCommand("model", "changer le modèle"),
-            BotCommand("session", "état de la session"),
-            BotCommand("doctor", "diagnostic du pont"),
-            BotCommand("stop", "interrompre et vider la file"),
-            BotCommand("interrupt", "rediriger l'agent en pleine tâche"),
-            BotCommand("start", "aide"),
+            BotCommand("new", L("nouvelle session", "new session")),
+            BotCommand("resume", L("reprendre une session passée", "resume a past session")),
+            BotCommand("mode", L("changer le mode (ask, auto...)", "change the mode (ask, auto...)")),
+            BotCommand("model", L("changer le modèle", "change the model")),
+            BotCommand("session", L("état de la session", "session state")),
+            BotCommand("doctor", L("diagnostic du pont", "bridge diagnostics")),
+            BotCommand("stop", L("interrompre et vider la file", "interrupt and clear the queue")),
+            BotCommand("interrupt", L("rediriger l'agent en pleine tâche", "redirect the agent mid-task")),
+            BotCommand("start", L("aide", "help")),
         ])
 
 

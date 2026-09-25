@@ -74,6 +74,7 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré
 | `VIBE_BRIDGE_STDIO_LIMIT` | non | `33554432` (octets) |
 | `MISTRAL_API_KEY` | pour les notes vocales | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
+| `VIBE_BRIDGE_LANG` | non | `fr` (`en` disponible) |
 | `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |
 
 ## Identité et mémoire de l'agent (hors pont, côté vibe-acp)

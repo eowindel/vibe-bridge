@@ -75,6 +75,7 @@ on stdio), with no intermediate SDK — the ACP client is built in
 | `VIBE_BRIDGE_STDIO_LIMIT` | no | `33554432` (bytes) |
 | `MISTRAL_API_KEY` | for voice notes | — |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | no | `900` (seconds) |
+| `VIBE_BRIDGE_LANG` | no | `fr` (`en` available) |
 | `VIBE_BRIDGE_LOG_LEVEL` | no | `INFO` |
 
 ## Agent identity and memory (outside the bridge, on the vibe-acp side)
@@ -150,5 +151,5 @@ network timeout with ACP sender corruption on the SDK side, session killed
 by an oversized ACP exchange): here, the ACP client is built in and
 minimal, and the only external dependency is `python-telegram-bot`.
 
-> Note: user-facing bridge messages are currently in French. An i18n option
-> is on the roadmap.
+> Note: user-facing bridge messages are in French by default; set
+> `VIBE_BRIDGE_LANG=en` for English.
