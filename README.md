@@ -75,6 +75,10 @@ on stdio), with no intermediate SDK — the ACP client is built in
 | `VIBE_BRIDGE_TRANSCRIBE_MODEL` | no | `voxtral-mini-latest` |
 | `VIBE_BRIDGE_STDIO_LIMIT` | no | `33554432` (bytes) |
 | `MISTRAL_API_KEY` | for voice notes | — |
+| `VIBE_BRIDGE_HTTP_PORT` | no | `8123` |
+| `VIBE_BRIDGE_HTTP_TOKEN` | to enable the HTTP endpoint | — |
+| `VIBE_BRIDGE_HTTP_ALLOWED_IPS` | no | `127.0.0.1` |
+| `VIBE_BRIDGE_HTTP_SYNC_TIMEOUT` | no | `600` (seconds) |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | no | `900` (seconds) |
 | `VIBE_BRIDGE_LANG` | no | `fr` — initial language; `/language` switches at runtime and persists |
 | `VIBE_BRIDGE_LOG_LEVEL` | no | `INFO` |
@@ -127,7 +131,27 @@ WantedBy=multi-user.target
 
 Then `systemctl daemon-reload && systemctl enable --now vibe-bridge`.
 
-## ACP pitfalls found in production
+## HTTP API (automation)
+
+Optional endpoint for programmatic prompt injection (n8n, systemd timers,
+scripts). Disabled unless `VIBE_BRIDGE_HTTP_TOKEN` is set.
+
+```
+POST /prompt
+Authorization: Bearer <VIBE_BRIDGE_HTTP_TOKEN>
+{"text": "the instruction", "wait": false}
+```
+
+- `wait: false` (default): the prompt is queued; the answer is delivered to
+  Telegram as usual — you see automated exchanges in your chat.
+- `wait: true`: the HTTP response body contains the agent's final answer
+  (for workflows that need the result back).
+
+The prompt targets the last chat seen by the bridge (the allowlisted user).
+Requests are limited to `VIBE_BRIDGE_HTTP_ALLOWED_IPS` and require the
+bearer token.
+
+
 
 Each of these cost a debugging session — the bridge handles them all, but
 they are worth knowing if you write your own ACP client:

@@ -74,6 +74,10 @@ sur stdio), sans SDK intermédiaire — le client ACP est intégré
 | `VIBE_BRIDGE_TRANSCRIBE_MODEL` | non | `voxtral-mini-latest` |
 | `VIBE_BRIDGE_STDIO_LIMIT` | non | `33554432` (octets) |
 | `MISTRAL_API_KEY` | pour les notes vocales | — |
+| `VIBE_BRIDGE_HTTP_PORT` | non | `8123` |
+| `VIBE_BRIDGE_HTTP_TOKEN` | pour activer l'endpoint HTTP | — |
+| `VIBE_BRIDGE_HTTP_ALLOWED_IPS` | non | `127.0.0.1` |
+| `VIBE_BRIDGE_HTTP_SYNC_TIMEOUT` | non | `600` (secondes) |
 | `VIBE_BRIDGE_PROMPT_TIMEOUT` | non | `900` (secondes) |
 | `VIBE_BRIDGE_LANG` | non | `fr` — langue initiale ; `/language` change a chaud et persiste |
 | `VIBE_BRIDGE_LOG_LEVEL` | non | `INFO` |
@@ -126,6 +130,27 @@ WantedBy=multi-user.target
 ```
 
 Puis `systemctl daemon-reload && systemctl enable --now vibe-bridge`.
+
+## API HTTP (automatisation)
+
+Endpoint optionnel d'injection programmatique de prompts (n8n, timers
+systemd, scripts). Desactive tant que `VIBE_BRIDGE_HTTP_TOKEN` n'est pas defini.
+
+```
+POST /prompt
+Authorization: Bearer <VIBE_BRIDGE_HTTP_TOKEN>
+{"text": "la consigne", "wait": false}
+```
+
+- `wait: false` (defaut) : le prompt est mis en file ; la reponse arrive sur
+  Telegram comme d'habitude — les echanges automatiques sont visibles dans
+  votre chat.
+- `wait: true` : le corps de la reponse HTTP contient la reponse finale de
+  l'agent (pour les workflows qui ont besoin du resultat).
+
+Le prompt vise le dernier chat connu du pont (l'utilisateur autorise).
+Les requetes sont limitees a `VIBE_BRIDGE_HTTP_ALLOWED_IPS` et exigent le
+bearer token.
 
 ## Pièges ACP découverts en production
 
