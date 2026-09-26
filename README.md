@@ -101,6 +101,11 @@ uv venv
 uv pip install --python .venv/bin/python -e .
 ```
 
+Prerequisites (bot token, Telegram user ID, Mistral API key), the
+systemd unit and the verification steps are detailed in
+[INSTALL.md](INSTALL.md) — including a **one-prompt install** you can
+paste into any AI coding agent to drive the whole setup.
+
 ## systemd service
 
 Example (adapt user, paths and environment files to your setup):
@@ -176,6 +181,13 @@ with `telegram-acp-bot` (unbounded dependencies, agent reply lost on a
 network timeout with ACP sender corruption on the SDK side, session killed
 by an oversized ACP exchange): here, the ACP client is built in and
 minimal, and the only external dependency is `python-telegram-bot`.
+
+## Credits
+
+Built in three days of human/AI pairing by [@eowindel](https://github.com/eowindel) (product decisions,
+ architecture, testing in production) with **Mistral Vibe**, the AI
+ coding agent (implementation). A bridge for Mistral Vibe, built with
+ Mistral Vibe.
 
 > Note: user-facing bridge messages are in French by default; set
 > `VIBE_BRIDGE_LANG=en` for English.
