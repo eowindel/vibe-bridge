@@ -129,13 +129,24 @@ async def transcribe_audio(data: bytes, filename: str) -> str:
     """Transcription d'un audio via l'API Voxtral de Mistral."""
     if not MISTRAL_API_KEY:
         raise RuntimeError(L("MISTRAL_API_KEY absente du pont", "MISTRAL_API_KEY missing from the bridge"))
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            "https://api.mistral.ai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {MISTRAL_API_KEY}"},
-            data={"model": TRANSCRIBE_MODEL},
-            files={"file": (filename, data, "audio/ogg")},
-        )
+    # Reprise sur timeout de connexion : requete jamais partie, aucun
+    # risque (lecon des ReadTimeout/ConnectTimeout du 25/09).
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    "https://api.mistral.ai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {MISTRAL_API_KEY}"},
+                    data={"model": TRANSCRIBE_MODEL},
+                    files={"file": (filename, data, "audio/ogg")},
+                )
+            break
+        except httpx.TimeoutException as err:
+            if attempt == 2 or not isinstance(
+                err, (httpx.ConnectTimeout, httpx.PoolTimeout)
+            ):
+                raise
+            await asyncio.sleep(1.5 * (attempt + 1))
     if resp.status_code != 200:
         raise RuntimeError(f"API transcription {resp.status_code} : {resp.text[:200]}")
     text = (resp.json().get("text") or "").strip()
