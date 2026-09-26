@@ -8,9 +8,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import logging
 import os
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import httpx
@@ -47,6 +50,19 @@ ALLOWED_USER_IDS = {
     if x
 }
 
+# Endpoint HTTP POST /prompt (n8n, timers systemd, scripts).
+# Desactive tant que VIBE_BRIDGE_HTTP_TOKEN n'est pas defini.
+HTTP_PORT = int(os.environ.get("VIBE_BRIDGE_HTTP_PORT", "8123"))
+HTTP_TOKEN = os.environ.get("VIBE_BRIDGE_HTTP_TOKEN", "")
+HTTP_ALLOWED_IPS = {
+    x for x in os.environ.get("VIBE_BRIDGE_HTTP_ALLOWED_IPS", "127.0.0.1")
+    .replace(",", " ").split() if x
+}
+HTTP_SYNC_TIMEOUT = float(os.environ.get("VIBE_BRIDGE_HTTP_SYNC_TIMEOUT", "600"))
+_MAIN_LOOP: asyncio.AbstractEventLoop | None = None
+_APP: Application | None = None
+_LAST_CHAT_ID: int | None = None
+_httpd: ThreadingHTTPServer | None = None
 
 LANG_FILE = os.path.expanduser("~/.vibe-bridge.lang")
 
@@ -362,6 +378,15 @@ class ChatSession:
                 self.worker.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self.worker
+        while True:
+            try:
+                item = self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, dict):
+                fut = item.get("future")
+                if fut and not fut.done():
+                    fut.set_exception(RuntimeError("session arrêtée"))
 
     async def start_session(self, load_session_id: str | None = None) -> None:
         agent = AcpAgent(AGENT_COMMAND, WORKSPACE)
@@ -394,6 +419,8 @@ class ChatSession:
             item = await self.queue.get()
             if item is None:
                 return
+            blocks = item["blocks"]
+            fut = item.get("future")
             self.busy = True
             self.text = ""
             self.thought = ""
@@ -402,11 +429,13 @@ class ChatSession:
             self.last_edit = 0.0
             agent = self.agent
             if agent is None:
+                if fut and not fut.done():
+                    fut.set_exception(RuntimeError("no agent available"))
                 self.busy = False
                 return
             try:
                 typing_task = asyncio.create_task(self._keep_typing())
-                result = await agent.prompt(item, timeout=PROMPT_TIMEOUT)
+                result = await agent.prompt(blocks, timeout=PROMPT_TIMEOUT)
                 await self.finalize()
                 stop = result.get("stopReason")
                 if stop == "cancelled" and self.redirect_pending:
@@ -436,6 +465,8 @@ class ChatSession:
                 typing_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await typing_task
+                if fut and not fut.done():
+                    fut.set_result(self.text.strip())
                 self.busy = False
 
     async def interrupt_and_redirect(self, text: str) -> None:
@@ -446,17 +477,21 @@ class ChatSession:
             self.redirect_pending = True
             with contextlib.suppress(Exception):
                 await self.agent.cancel()
-            self.queue.put_nowait([text_block(text)])  # traité dès la fin du cycle annulé
+            self.queue.put_nowait({"blocks": [text_block(text)]})  # traité dès la fin du cycle annulé
         else:
-            self.queue.put_nowait([text_block(text)])
+            self.queue.put_nowait({"blocks": [text_block(text)]})
 
     async def interrupt(self) -> int:
         """/stop : annule le cycle courant et vide la file."""
         drained = 0
         while True:
             try:
-                self.queue.get_nowait()
+                item = self.queue.get_nowait()
                 drained += 1
+                if isinstance(item, dict):
+                    fut = item.get("future")
+                    if fut and not fut.done():
+                        fut.set_exception(RuntimeError("cycle interrompu"))
             except asyncio.QueueEmpty:
                 break
         if self.agent:
@@ -476,6 +511,8 @@ def session_for(update: Update, context: ContextTypes.DEFAULT_TYPE) -> ChatSessi
     chat = update.effective_chat
     if chat is None:
         return None
+    global _LAST_CHAT_ID
+    _LAST_CHAT_ID = chat.id
     sessions: dict[int, ChatSession] = context.bot_data.setdefault("sessions", {})
     if chat.id not in sessions:
         sessions[chat.id] = ChatSession(context.bot, chat.id)
@@ -767,10 +804,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception:
         return  # le message d'erreur a déjà été envoyé par start_session
     if s.busy:
-        s.queue.put_nowait([text_block(text)])
+        s.queue.put_nowait({"blocks": [text_block(text)]})
         await s.send(L("… mis en file d'attente", "… queued"))
     else:
-        s.queue.put_nowait([text_block(text)])
+        s.queue.put_nowait({"blocks": [text_block(text)]})
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -818,10 +855,10 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 text=f"🎙 {text[:1000]}",
             )
     if s.busy:
-        s.queue.put_nowait([text_block(text)])
+        s.queue.put_nowait({"blocks": [text_block(text)]})
         await s.send(L("… mis en file d'attente", "… queued"))
     else:
-        s.queue.put_nowait([text_block(text)])
+        s.queue.put_nowait({"blocks": [text_block(text)]})
 
 
 async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -869,10 +906,10 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 text=f"🖼 {caption[:300]}",
             )
     if s.busy:
-        s.queue.put_nowait(blocks)
+        s.queue.put_nowait({"blocks": blocks})
         await s.send(L("… mis en file d'attente", "… queued"))
     else:
-        s.queue.put_nowait(blocks)
+        s.queue.put_nowait({"blocks": blocks})
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -946,6 +983,80 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
+async def _inject_prompt(text: str, wait: bool) -> str | None:
+    """Point d'entree HTTP : injecte un prompt dans la session du chat
+    connu du pont (le dernier chat de l'utilisateur autorise)."""
+    assert _APP is not None and _MAIN_LOOP is not None
+    if _LAST_CHAT_ID is None:
+        raise RuntimeError(L(
+            "aucun chat connu — envoyez d'abord un message au bot",
+            "no known chat yet — send a message to the bot first"))
+    sessions: dict[int, ChatSession] = _APP.bot_data.setdefault("sessions", {})
+    if _LAST_CHAT_ID not in sessions:
+        sessions[_LAST_CHAT_ID] = ChatSession(_APP.bot, _LAST_CHAT_ID)
+    s = sessions[_LAST_CHAT_ID]
+    await s.ensure_session()
+    if wait:
+        fut: asyncio.Future[str] = _MAIN_LOOP.create_future()
+        s.queue.put_nowait({"blocks": [text_block(text)], "future": fut})
+        return await asyncio.wait_for(fut, HTTP_SYNC_TIMEOUT)
+    s.queue.put_nowait({"blocks": [text_block(text)]})
+    return None
+
+
+class _PromptHandler(BaseHTTPRequestHandler):
+    """POST /prompt : {"text": "...", "wait": false}."""
+
+    def log_message(self, *args: Any) -> None:
+        pass  # ne pas logger les requetes (elles contiennent les prompts)
+
+    def _reply(self, code: int, payload: dict) -> None:
+        body = json.dumps({"ok": code == 200, **payload},
+                           ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        try:
+            if self.path != "/prompt":
+                return self._reply(404, {"error": "not found"})
+            if self.client_address[0] not in HTTP_ALLOWED_IPS:
+                return self._reply(403, {"error": "forbidden"})
+            if not HTTP_TOKEN:
+                return self._reply(503, {"error": "endpoint disabled"})
+            auth = self.headers.get("Authorization", "")
+            if auth != f"Bearer {HTTP_TOKEN}":
+                return self._reply(401, {"error": "unauthorized"})
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            text = str(body.get("text") or "").strip()
+            if not text:
+                return self._reply(400, {"error": "empty text"})
+            wait = bool(body.get("wait"))
+            fut = asyncio.run_coroutine_threadsafe(
+                _inject_prompt(text, wait), _MAIN_LOOP)
+            answer = fut.result(timeout=HTTP_SYNC_TIMEOUT + 60)
+            payload = {} if answer is None else {"answer": answer}
+            self._reply(200, payload)
+        except Exception as e:
+            self._reply(500, {"error": str(e)[:300]})
+
+
+def _start_http_server() -> None:
+    """Lance POST /prompt dans un thread (la boucle asyncio reste au PTB)."""
+    global _httpd
+    if not HTTP_TOKEN:
+        log.warning("VIBE_BRIDGE_HTTP_TOKEN absent — endpoint POST /prompt desactive")
+        return
+    _httpd = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), _PromptHandler)
+    threading.Thread(target=_httpd.serve_forever, name="vibe-bridge-http",
+                     daemon=True).start()
+    log.info("endpoint POST /prompt actif sur le port %s", HTTP_PORT)
+
+
 async def _register_commands(bot: Any) -> None:
     """Enregistre le menu de commandes Telegram (setMyCommands persiste
     par bot ; rappele apres un /language pour rafraichir les descriptions)."""
@@ -965,13 +1076,19 @@ async def _register_commands(bot: Any) -> None:
 
 
 async def _post_init(app: Application) -> None:
+    global _MAIN_LOOP, _APP
+    _APP = app
+    _MAIN_LOOP = asyncio.get_running_loop()
     await _register_commands(app.bot)
+    _start_http_server()
 
 
 async def _post_shutdown(app: Application) -> None:
     """Extinction propre : fermer chaque session (worker, lecteur,
     process agent). Sans ça, les taches en attente et l'enfant vibe-acp
     laissent le service pendre jusqu'au SIGKILL de systemd."""
+    if _httpd is not None:
+        _httpd.shutdown()
     sessions: dict[int, ChatSession] = app.bot_data.get("sessions", {})
     for s in sessions.values():
         with contextlib.suppress(Exception):
